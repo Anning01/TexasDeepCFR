@@ -1,5 +1,5 @@
 import random
-import pokers as pkrs
+import pokers
 
 from game_logger import log_game_error
 from settings import STRICT_CHECKING
@@ -21,21 +21,21 @@ class RandomAgent:
             # 在有效的游戏状态下，理想情况下这不应该发生
             print(f"警告：玩家 {self.player_id} 没有可用的合法操作。尝试弃牌。")
             # 尝试将弃牌作为后备，尽管它也可能是非法的
-            return pkrs.Action(pkrs.ActionEnum.Fold)
+            return pokers.Action(pokers.ActionEnum.Fold)
 
         # 从可用操作中选择一个随机的合法操作类型
         action_enum = random.choice(state.legal_actions)
 
         # 首先处理非加注操作
-        if action_enum == pkrs.ActionEnum.Fold:
-            return pkrs.Action(action_enum)
-        elif action_enum == pkrs.ActionEnum.Check:
-            return pkrs.Action(action_enum)
-        elif action_enum == pkrs.ActionEnum.Call:
-            return pkrs.Action(action_enum)
+        if action_enum == pokers.ActionEnum.Fold:
+            return pokers.Action(action_enum)
+        elif action_enum == pokers.ActionEnum.Check:
+            return pokers.Action(action_enum)
+        elif action_enum == pokers.ActionEnum.Call:
+            return pokers.Action(action_enum)
 
         # 处理加注操作
-        elif action_enum == pkrs.ActionEnum.Raise:
+        elif action_enum == pokers.ActionEnum.Raise:
             player_state = state.players_state[state.current_player]
             current_bet = player_state.bet_chips
             available_stake = player_state.stake
@@ -55,7 +55,7 @@ class RandomAgent:
                 # 这并不完美，如果可能的话，可能需要将直接的大盲注值传递给state
                 likely_bb = (
                     state.min_bet
-                    if state.stage == pkrs.Stage.Preflop
+                    if state.stage == pokers.Stage.Preflop
                     and state.pot <= 3 * state.min_bet
                     else state.min_bet / 2
                 )
@@ -69,19 +69,19 @@ class RandomAgent:
                 # 这个操作应该被视为跟注，而不是加注。
                 # print(f"RandomAgent: 选择了加注，但无法进行有效加注。筹码={available_stake}, 跟注金额={call_amount}, 最小增量={min_raise_increment}。切换到跟注。")  # 可选调试
                 # 在返回跟注之前确保跟注是合法的
-                if pkrs.ActionEnum.Call in state.legal_actions:
-                    return pkrs.Action(pkrs.ActionEnum.Call)
+                if pokers.ActionEnum.Call in state.legal_actions:
+                    return pokers.Action(pokers.ActionEnum.Call)
                 else:
                     # 后备方案：如果跟注不合法（例如，已经全下匹配下注），则弃牌。
                     # print(f"RandomAgent 警告：无法跟注（不合法），回退到弃牌。")
                     # 如果可能的话，确保弃牌是合法的
-                    if pkrs.ActionEnum.Fold in state.legal_actions:
-                        return pkrs.Action(pkrs.ActionEnum.Fold)
+                    if pokers.ActionEnum.Fold in state.legal_actions:
+                        return pokers.Action(pokers.ActionEnum.Fold)
                     else:
                         # 最后手段，如果弃牌也不合法（极不可能）
                         # print(f"RandomAgent 严重警告：无法跟注或弃牌！")
                         # 无论如何都返回跟注，让Rust处理错误状态
-                        return pkrs.Action(pkrs.ActionEnum.Call)
+                        return pokers.Action(pokers.ActionEnum.Call)
 
             # 如果我们到达这里，说明可以进行有效的加注。
             remaining_stake_after_call = available_stake - call_amount
@@ -123,25 +123,25 @@ class RandomAgent:
                 print(
                     f"RandomAgent 警告：过滤后没有找到有效的额外加注金额。回退到跟注。"
                 )
-                if pkrs.ActionEnum.Call in state.legal_actions:
-                    return pkrs.Action(pkrs.ActionEnum.Call)
+                if pokers.ActionEnum.Call in state.legal_actions:
+                    return pokers.Action(pokers.ActionEnum.Call)
                 else:  # 如果跟注不合法，回退到弃牌
-                    if pkrs.ActionEnum.Fold in state.legal_actions:
-                        return pkrs.Action(pkrs.ActionEnum.Fold)
+                    if pokers.ActionEnum.Fold in state.legal_actions:
+                        return pokers.Action(pokers.ActionEnum.Fold)
                     else:  # 最后手段
-                        return pkrs.Action(pkrs.ActionEnum.Call)
+                        return pokers.Action(pokers.ActionEnum.Call)
 
             # 从有效选项中选择一个随机的*额外*加注金额
             additional_raise = random.choice(possible_additional_amounts)
 
             # 创建最终的加注操作
-            action = pkrs.Action(action_enum, additional_raise)
+            action = pokers.Action(action_enum, additional_raise)
 
             # 可选：严格检查（如果启用）
             if STRICT_CHECKING:
                 # 临时应用操作以检查Rust状态
                 test_state = state.apply_action(action)
-                if test_state.status != pkrs.StateStatus.Ok:
+                if test_state.status != pokers.StateStatus.Ok:
                     log_file = log_game_error(
                         state,
                         action,
@@ -151,19 +151,19 @@ class RandomAgent:
                     print(
                         f"RandomAgent 严格检查失败：无效的加注({additional_raise})。状态：{test_state.status}。回退到跟注。日志：{log_file}"
                     )
-                    if pkrs.ActionEnum.Call in state.legal_actions:
-                        return pkrs.Action(pkrs.ActionEnum.Call)
+                    if pokers.ActionEnum.Call in state.legal_actions:
+                        return pokers.Action(pokers.ActionEnum.Call)
                     else:  # 如果跟注不合法，回退到弃牌
-                        if pkrs.ActionEnum.Fold in state.legal_actions:
-                            return pkrs.Action(pkrs.ActionEnum.Fold)
+                        if pokers.ActionEnum.Fold in state.legal_actions:
+                            return pokers.Action(pokers.ActionEnum.Fold)
                         else:  # 最后手段
-                            return pkrs.Action(pkrs.ActionEnum.Call)
+                            return pokers.Action(pokers.ActionEnum.Call)
 
             return action
         else:
             # 如果action_enum来自legal_actions，这不应该发生
             print(f"警告：RandomAgent遇到意外的操作枚举：{action_enum}。回退到弃牌。")
-            if pkrs.ActionEnum.Fold in state.legal_actions:
-                return pkrs.Action(pkrs.ActionEnum.Fold)
+            if pokers.ActionEnum.Fold in state.legal_actions:
+                return pokers.Action(pokers.ActionEnum.Fold)
             else:  # 最后手段
-                return pkrs.Action(pkrs.ActionEnum.Check)  # 如果弃牌不合法，则选择过牌
+                return pokers.Action(pokers.ActionEnum.Check)  # 如果弃牌不合法，则选择过牌
