@@ -1,0 +1,6 @@
+models
+.claude
+.venv
+.idea
+logs
+*.pyc

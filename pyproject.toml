@@ -1,0 +1,13 @@
+[project]
+name = "deepcfr"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.10"
+dependencies = [
+    "logging>=0.4.9.6",
+    "numpy>=2.2.6",
+    "pokers-db>=2.2",
+    "tensorboard>=2.20.0",
+    "torch==2.5.1",
+    "verbose>=1.0.0",
+]
