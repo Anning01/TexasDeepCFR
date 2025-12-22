@@ -30,7 +30,7 @@
 
 ```bash
 # 克隆项目
-git clone <repository-url>
+git clone https://github.com/Anning01/TexasDeepCFR.git
 cd deepCFR
 
 # 创建虚拟环境（推荐使用 uv）
