@@ -21,11 +21,10 @@ if __name__ == "__main__":
 def _run_single_traversal(args):
     """
     单个CFR遍历的工作函数（在子进程中运行）
-    优化：每个进程执行多次遍历，减少进程启动开销
 
     返回收集到的经验数据
     """
-    agent_state_dict, iteration, seeds, num_players, memory_size = args
+    agent_state_dict, iteration, seed, num_players, memory_size = args
 
     # 在子进程中重新创建agent
     agent = DeepCFRAgent(player_id=0, num_players=num_players, memory_size=memory_size, device='cpu')
@@ -37,25 +36,23 @@ def _run_single_traversal(args):
     # 创建随机对手
     random_agents = [RandomAgent(i) for i in range(num_players)]
 
-    # 执行多次遍历（批量处理）
-    for seed in seeds:
-        # 创建游戏
-        state = pokers.State.from_seed(
-            n_players=num_players,
-            button=seed % num_players,
-            sb=1,
-            bb=2,
-            stake=200.0,
-            seed=seed
-        )
+    # 创建游戏
+    state = pokers.State.from_seed(
+        n_players=num_players,
+        button=seed % num_players,
+        sb=1,
+        bb=2,
+        stake=200.0,
+        seed=seed
+    )
 
-        # 执行遍历
-        agent.cfr_traverse(state, iteration, random_agents)
+    # 执行遍历
+    agent.cfr_traverse(state, iteration, random_agents)
 
     # 返回收集到的经验
     return {
-        'advantage_memory': list(agent.advantage_memory.buffer),
-        'strategy_memory': list(agent.strategy_memory)
+        'advantage_memory': list(agent.advantage_memory.buffer)[:1000],  # 限制传输量
+        'strategy_memory': list(agent.strategy_memory)[:1000]
     }
 
 
@@ -66,9 +63,8 @@ def parallel_cfr_traversals(agent, iteration, num_traversals, num_players=6, num
     参数:
         num_workers: 工作进程数（None=CPU核心数，0=串行模式）
     """
-    # 串行模式或遍历次数太少
-    if num_workers == 0 or num_traversals < 40:
-        # 串行模式（用于调试或遍历次数太少）
+    if num_workers == 0:
+        # 串行模式（用于调试或单核机器）
         random_agents = [RandomAgent(i) for i in range(num_players)]
         for _ in range(num_traversals):
             state = pokers.State.from_seed(
@@ -85,38 +81,21 @@ def parallel_cfr_traversals(agent, iteration, num_traversals, num_players=6, num
     if num_workers is None:
         num_workers = min(mp.cpu_count(), 32)  # 最多32个进程
 
-    # 关键优化：减少进程数，增加每个进程的工作量
-    # 每个进程至少执行10次遍历，最多使用cpu_count/2个进程
-    traversals_per_worker = max(10, num_traversals // num_workers)
-    actual_workers = min(num_workers, max(1, num_traversals // traversals_per_worker))
-
-    print(f"    → 优化: {actual_workers}个进程，每个执行{traversals_per_worker}次遍历")
-
     # 准备agent状态
     agent_state_dict = {
         'advantage_net': agent.advantage_net.cpu().state_dict(),
         'strategy_net': agent.strategy_net.cpu().state_dict()
     }
 
-    # 准备任务：每个任务包含多个seed
-    tasks = []
-    remaining = num_traversals
-    for i in range(actual_workers):
-        # 分配遍历次数
-        if i == actual_workers - 1:
-            # 最后一个进程处理剩余所有
-            batch_size = remaining
-        else:
-            batch_size = traversals_per_worker
-            remaining -= batch_size
-
-        # 生成这批的seeds
-        seeds = [random.randint(0, 100000) for _ in range(batch_size)]
-        tasks.append((agent_state_dict, iteration, seeds, num_players, agent.advantage_memory.capacity))
+    # 准备任务
+    tasks = [
+        (agent_state_dict, iteration, random.randint(0, 100000), num_players, agent.advantage_memory.capacity)
+        for _ in range(num_traversals)
+    ]
 
     # 并行执行
-    with mp.Pool(processes=actual_workers) as pool:
-        results = pool.map(_run_single_traversal, tasks)
+    with mp.Pool(processes=num_workers) as pool:
+        results = pool.map(_run_single_traversal, tasks, chunksize=max(1, num_traversals // num_workers))
 
     # 合并结果
     for result in results:
@@ -130,7 +109,7 @@ def parallel_cfr_traversals(agent, iteration, num_traversals, num_players=6, num
         agent.advantage_net.to(agent.device)
         agent.strategy_net.to(agent.device)
 
-    return num_traversals
+    return len(results)
 
 
 def evaluate_against_random(agent, num_games=500, num_players=6):
