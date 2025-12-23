@@ -2,7 +2,7 @@ import random
 from collections import deque
 
 import numpy as np
-import pokers
+import pokerkit_adapter as pokers
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -489,8 +489,14 @@ class DeepCFRAgent:
         """获取当前状态的合法动作类型。"""
         legal_action_types = []
 
+        # 如果可以 Check（免费看牌），不应该 Fold
+        # 这避免了 PokerKit 的警告和潜在的状态错误
+        can_check = pokers.ActionEnum.Check in state.legal_actions
+        can_fold = pokers.ActionEnum.Fold in state.legal_actions
+
         # 检查每种动作类型
-        if pokers.ActionEnum.Fold in state.legal_actions:
+        if can_fold and not can_check:
+            # 只有在不能 Check 时才允许 Fold
             legal_action_types.append(0)
 
         if (
@@ -582,10 +588,10 @@ class DeepCFRAgent:
 
                     new_state = state.apply_action(pokers_action)
 
-                    # 检查动作是否有效
-                    if new_state.status != pokers.StateStatus.Ok:
+                    # 检查动作是否有效（只有 Invalid 才是错误）
+                    if new_state.status == pokers.StateStatus.Invalid:
                         log_file = log_game_error(
-                            state, pokers_action, f"状态状态不正常 ({new_state.status})"
+                            state, pokers_action, f"状态错误 ({new_state.status})"
                         )
                         if STRICT_CHECKING:
                             raise ValueError(
@@ -681,12 +687,19 @@ class DeepCFRAgent:
             try:
                 # 让随机智能体选择动作
                 action = random_agents[current_player].choose_action(state)
+
+                # 如果没有合法动作（自动化阶段或游戏结束），返回0
+                if action is None:
+                    if VERBOSE:
+                        print(f"随机智能体在深度 {depth} 处没有可用动作（可能是自动化阶段）")
+                    return 0
+
                 new_state = state.apply_action(action)
 
-                # 检查动作是否有效
-                if new_state.status != pokers.StateStatus.Ok:
+                # 检查动作是否有效（只有 Invalid 才是错误）
+                if new_state.status == pokers.StateStatus.Invalid:
                     log_file = log_game_error(
-                        state, action, f"状态状态不正常 ({new_state.status})"
+                        state, action, f"状态错误 ({new_state.status})"
                     )
                     if STRICT_CHECKING:
                         raise ValueError(
@@ -1037,14 +1050,9 @@ class DeepCFRAgent:
         """在实际游戏中为给定状态选择动作。"""
         legal_action_types = self.get_legal_action_types(state)
 
+        # 如果没有合法动作（自动化阶段或游戏结束），返回 None
         if not legal_action_types:
-            # 如果没有合法动作，默认选择跟注（理论上不应该发生）
-            if pokers.ActionEnum.Call in state.legal_actions:
-                return pokers.Action(pokers.ActionEnum.Call)
-            elif pokers.ActionEnum.Check in state.legal_actions:
-                return pokers.Action(pokers.ActionEnum.Check)
-            else:
-                return pokers.Action(pokers.ActionEnum.Fold)
+            return None
 
         state_tensor = (
             torch.FloatTensor(encode_state(state, self.player_id))

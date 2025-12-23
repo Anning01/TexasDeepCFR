@@ -3,7 +3,7 @@ import random
 import time
 
 import numpy as np
-import pokers
+import pokerkit_adapter as pokers
 import torch
 
 from core.deepcfr import DeepCFRAgent
@@ -31,11 +31,9 @@ def evaluate_against_random(agent, num_games=500, num_players=6):
                 stake=200.0,  # 初始筹码
                 seed=game,  # 随机种子
             )
-
             # 游戏循环，直到游戏结束
             while not state.final_state:
                 current_player = state.current_player  # 当前行动玩家
-
                 # 根据当前玩家选择不同的代理
                 if current_player == agent.player_id:
                     action = agent.choose_action(state)  # 使用训练好的智能体选择动作
@@ -43,10 +41,15 @@ def evaluate_against_random(agent, num_games=500, num_players=6):
                     action = random_agents[current_player].choose_action(
                         state
                     )  # 使用随机策略对手选择动作
+                # 如果没有合法动作，说明游戏状态有问题，跳出循环
+                if action is None:
+                    print(f"警告: 游戏 {game} 中出现 action=None，跳出游戏循环")
+                    break
 
                 # 应用动作并检查状态是否有效
                 new_state = state.apply_action(action)
-                if new_state.status != pokers.StateStatus.Ok:
+                # 只有 Invalid 状态才是错误，Ok 和 GameOver 都是正常的
+                if new_state.status == pokers.StateStatus.Invalid:
                     # 记录游戏错误
                     log_file = log_game_error(
                         state, action, f"状态错误 ({new_state.status})"
@@ -60,7 +63,6 @@ def evaluate_against_random(agent, num_games=500, num_players=6):
                             f"警告: 游戏 {game} 中状态错误 ({new_state.status}). 详细信息记录在 {log_file}"
                         )
                         break  # 非严格模式下跳过本局游戏
-
                 state = new_state  # 更新游戏状态
 
             # 只统计已完成的游戏
@@ -133,19 +135,25 @@ def evaluate_against_checkpoint_agents(agent, opponent_agents, num_games=100):
                         state
                     )  # 对手智能体选择动作
 
+                # 如果没有合法动作，说明游戏状态有问题，跳出循环
+                if action is None:
+                    print(f"警告: 游戏 {game} 中出现 action=None，跳出游戏循环")
+                    break
+
                 # 应用动作并检查状态
                 new_state = state.apply_action(action)
-                if new_state.status != pokers.StateStatus.Ok:
+                # 只有 Invalid 状态才是错误，Ok 和 GameOver 都是正常的
+                if new_state.status == pokers.StateStatus.Invalid:
                     log_file = log_game_error(
-                        state, action, f"状态状态不正确 ({new_state.status})"
+                        state, action, f"状态错误 ({new_state.status})"
                     )
                     if STRICT_CHECKING:
                         raise ValueError(
-                            f"状态状态不正确 ({new_state.status}). 详情已记录到 {log_file}"
+                            f"状态错误 ({new_state.status}). 详情已记录到 {log_file}"
                         )
                     else:
                         print(
-                            f"警告: 游戏 {game} 中状态状态不正确 ({new_state.status})。详情已记录到 {log_file}"
+                            f"警告: 游戏 {game} 中状态错误 ({new_state.status})。详情已记录到 {log_file}"
                         )
                         break  # 在非严格模式下跳过此游戏
 
@@ -220,7 +228,7 @@ def train_deep_cfr(
     # 用于跟踪学习进度
     losses = []  # 损失记录
     profits = []  # 利润记录
-
+    print(f"玩家: {num_players}")
     # 在训练开始前进行初始评估
     print("初始评估中...")
     initial_profit = evaluate_against_random(
@@ -658,8 +666,8 @@ def train_against_checkpoint(
                     pokers_action = self.action_id_to_pokers_action(action_id, state)
                     new_state = state.apply_action(pokers_action)
 
-                    # 检查行动是否有效
-                    if new_state.status != pokers.StateStatus.Ok:
+                    # 检查行动是否有效（只有 Invalid 才是错误）
+                    if new_state.status == pokers.StateStatus.Invalid:
                         if verbose:
                             print(
                                 f"警告: 在深度 {depth} 处行动 {action_id} 无效。状态: {new_state.status}"
@@ -724,10 +732,15 @@ def train_against_checkpoint(
                 # 让相应的对手智能体选择行动
                 if opponent_agents[current_player] is not None:
                     action = opponent_agents[current_player].choose_action(state)
+
+                    # 如果没有合法动作（自动化阶段），返回0
+                    if action is None:
+                        return 0
+
                     new_state = state.apply_action(action)
 
-                    # 检查行动是否有效
-                    if new_state.status != pokers.StateStatus.Ok:
+                    # 检查行动是否有效（只有 Invalid 才是错误）
+                    if new_state.status == pokers.StateStatus.Invalid:
                         if verbose:
                             print(
                                 f"警告: 在深度 {depth} 处对手智能体行动无效。状态: {new_state.status}"
@@ -1026,8 +1039,8 @@ def train_with_mixed_checkpoints(
                     pokers_action = self.action_id_to_pokers_action(action_id, state)
                     new_state = state.apply_action(pokers_action)
 
-                    # Check if the action was valid
-                    if new_state.status != pokers.StateStatus.Ok:
+                    # Check if the action was valid (only Invalid is an error)
+                    if new_state.status == pokers.StateStatus.Invalid:
                         if verbose:
                             print(
                                 f"WARNING: Invalid action {action_id} at depth {depth}. Status: {new_state.status}"
@@ -1090,10 +1103,15 @@ def train_with_mixed_checkpoints(
                 # Let the appropriate opponent agent choose an action
                 if opponent_agents[current_player] is not None:
                     action = opponent_agents[current_player].choose_action(state)
+
+                    # 如果没有合法动作（自动化阶段），返回0
+                    if action is None:
+                        return 0
+
                     new_state = state.apply_action(action)
 
-                    # Check if the action was valid
-                    if new_state.status != pokers.StateStatus.Ok:
+                    # Check if the action was valid (only Invalid is an error)
+                    if new_state.status == pokers.StateStatus.Invalid:
                         if verbose:
                             print(
                                 f"WARNING: Opponent agent made invalid action at depth {depth}. Status: {new_state.status}"
@@ -1406,11 +1424,11 @@ if __name__ == "__main__":
     # 用于调试的严格训练
     set_strict_checking(args.strict)
 
-    # 使用subprocess运行tensorboard
-    import subprocess
-    tensorboard_process = subprocess.Popen(
-        f"tensorboard --logdir={args.log_dir}", shell=True
-    )
+    # # 使用subprocess运行tensorboard
+    # import subprocess
+    # tensorboard_process = subprocess.Popen(
+    #     f"tensorboard --logdir={args.log_dir}", shell=True
+    # )
     print("\n查看训练进度:")
     print("然后在浏览器中打开 http://localhost:6006")
 

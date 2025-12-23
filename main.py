@@ -3,7 +3,7 @@ import glob
 import os
 import random
 
-import pokers
+import pokerkit_adapter as pokers
 import torch
 
 from core.deepcfr import DeepCFRAgent

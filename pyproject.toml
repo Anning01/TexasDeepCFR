@@ -1,13 +1,13 @@
 [project]
 name = "deepcfr"
-version = "0.1.0"
-description = "Add your description here"
-requires-python = ">=3.10"
+version = "0.3.0"
+description = "基于深度反事实后悔最小化的无限注德州扑克AI训练系统 (PokerKit版本)"
+requires-python = ">=3.12"
 dependencies = [
     "logging>=0.4.9.6",
     "numpy>=2.2.6",
-    "pokers-db>=2.2",
+    "pokerkit>=0.6.0",
     "tensorboard>=2.20.0",
-    "torch==2.5.1",
+    "torch",
     "verbose>=1.0.0",
 ]

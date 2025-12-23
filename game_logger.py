@@ -6,7 +6,7 @@ DeepCFR扑克AI项目的日志工具。
 import os
 import time
 import traceback
-import pokers
+import pokerkit_adapter as pokers
 from typing import Callable, Optional
 
 

@@ -1,5 +1,5 @@
 import random
-import pokers
+import pokerkit_adapter as pokers
 
 from game_logger import log_game_error
 from settings import STRICT_CHECKING
@@ -17,14 +17,21 @@ class RandomAgent:
 
     def choose_action(self, state):
         """选择具有正确计算的下注大小的随机合法操作。"""
+        # 如果没有合法动作，返回 None 或跳过
+        # 这种情况发生在自动化阶段（发牌等）或游戏结束时
         if not state.legal_actions:
-            # 在有效的游戏状态下，理想情况下这不应该发生
-            print(f"警告：玩家 {self.player_id} 没有可用的合法操作。尝试弃牌。")
-            # 尝试将弃牌作为后备，尽管它也可能是非法的
-            return pokers.Action(pokers.ActionEnum.Fold)
+            # 不再尝试弃牌，直接返回 None
+            # 调用方应该检查并跳过这个玩家的动作
+            return None
+
+        # 如果可以 Check（免费看牌），移除 Fold 选项
+        # 避免在可以免费看牌时弃牌（PokerKit 会警告并可能导致状态错误）
+        available_actions = list(state.legal_actions)
+        if pokers.ActionEnum.Check in available_actions and pokers.ActionEnum.Fold in available_actions:
+            available_actions.remove(pokers.ActionEnum.Fold)
 
         # 从可用操作中选择一个随机的合法操作类型
-        action_enum = random.choice(state.legal_actions)
+        action_enum = random.choice(available_actions)
 
         # 首先处理非加注操作
         if action_enum == pokers.ActionEnum.Fold:
@@ -141,7 +148,7 @@ class RandomAgent:
             if STRICT_CHECKING:
                 # 临时应用操作以检查Rust状态
                 test_state = state.apply_action(action)
-                if test_state.status != pokers.StateStatus.Ok:
+                if test_state.status == pokers.StateStatus.Invalid:
                     log_file = log_game_error(
                         state,
                         action,
@@ -166,4 +173,4 @@ class RandomAgent:
             if pokers.ActionEnum.Fold in state.legal_actions:
                 return pokers.Action(pokers.ActionEnum.Fold)
             else:  # 最后手段
-                return pokers.Action(pokers.ActionEnum.Check)  # 如果弃牌不合法，则选择过牌
+                return pokers.Action(pokers.ActionEnum.Check)  # 如果弃牌不合法，则选择过牌  # 如果弃牌不合法，则选择过牌
