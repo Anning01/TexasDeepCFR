@@ -1,7 +1,6 @@
 import os
 import random
 import time
-import multiprocessing as mp
 
 import numpy as np
 import pokerkit_adapter as pokers
@@ -12,104 +11,6 @@ from core.model import set_verbose, encode_state
 from game_logger import log_game_error
 from random_agent import RandomAgent
 from settings import STRICT_CHECKING, set_strict_checking
-
-# 设置多进程启动方式（解决CUDA兼容性问题）
-if __name__ == "__main__":
-    mp.set_start_method('spawn', force=True)
-
-
-def _run_single_traversal(args):
-    """
-    单个CFR遍历的工作函数（在子进程中运行）
-
-    返回收集到的经验数据
-    """
-    agent_state_dict, iteration, seed, num_players, memory_size = args
-
-    # 在子进程中重新创建agent
-    agent = DeepCFRAgent(player_id=0, num_players=num_players, memory_size=memory_size, device='cpu')
-
-    # 加载网络权重
-    agent.advantage_net.load_state_dict(agent_state_dict['advantage_net'])
-    agent.strategy_net.load_state_dict(agent_state_dict['strategy_net'])
-
-    # 创建随机对手
-    random_agents = [RandomAgent(i) for i in range(num_players)]
-
-    # 创建游戏
-    state = pokers.State.from_seed(
-        n_players=num_players,
-        button=seed % num_players,
-        sb=1,
-        bb=2,
-        stake=200.0,
-        seed=seed
-    )
-
-    # 执行遍历
-    agent.cfr_traverse(state, iteration, random_agents)
-
-    # 返回收集到的经验
-    return {
-        'advantage_memory': list(agent.advantage_memory.buffer)[:1000],  # 限制传输量
-        'strategy_memory': list(agent.strategy_memory)[:1000]
-    }
-
-
-def parallel_cfr_traversals(agent, iteration, num_traversals, num_players=6, num_workers=None):
-    """
-    并行执行多个CFR遍历
-
-    参数:
-        num_workers: 工作进程数（None=CPU核心数，0=串行模式）
-    """
-    if num_workers == 0:
-        # 串行模式（用于调试或单核机器）
-        random_agents = [RandomAgent(i) for i in range(num_players)]
-        for _ in range(num_traversals):
-            state = pokers.State.from_seed(
-                n_players=num_players,
-                button=random.randint(0, num_players - 1),
-                sb=1,
-                bb=2,
-                stake=200.0,
-                seed=random.randint(0, 10000)
-            )
-            agent.cfr_traverse(state, iteration, random_agents)
-        return num_traversals
-
-    if num_workers is None:
-        num_workers = min(mp.cpu_count(), 32)  # 最多32个进程
-
-    # 准备agent状态
-    agent_state_dict = {
-        'advantage_net': agent.advantage_net.cpu().state_dict(),
-        'strategy_net': agent.strategy_net.cpu().state_dict()
-    }
-
-    # 准备任务
-    tasks = [
-        (agent_state_dict, iteration, random.randint(0, 100000), num_players, agent.advantage_memory.capacity)
-        for _ in range(num_traversals)
-    ]
-
-    # 并行执行
-    with mp.Pool(processes=num_workers) as pool:
-        results = pool.map(_run_single_traversal, tasks, chunksize=max(1, num_traversals // num_workers))
-
-    # 合并结果
-    for result in results:
-        for exp in result['advantage_memory']:
-            agent.advantage_memory.add(exp)
-        for exp in result['strategy_memory']:
-            agent.strategy_memory.append(exp)
-
-    # 将网络移回原设备
-    if torch.cuda.is_available():
-        agent.advantage_net.to(agent.device)
-        agent.strategy_net.to(agent.device)
-
-    return len(results)
 
 
 def evaluate_against_random(agent, num_games=500, num_players=6):
@@ -288,7 +189,6 @@ def train_deep_cfr(
     save_dir="models",
     log_dir="logs/deepcfr",
     memory_size=1000000,
-    num_workers=None,
     verbose=False,
 ):
     """
@@ -324,6 +224,9 @@ def train_deep_cfr(
         device="cuda" if torch.cuda.is_available() else "cpu",
     )
 
+    # 创建随机策略对手
+    random_agents = [RandomAgent(i) for i in range(num_players)]
+
     # 用于跟踪学习进度
     losses = []  # 损失记录
     profits = []  # 利润记录
@@ -347,15 +250,21 @@ def train_deep_cfr(
 
         print(f"迭代 {iteration}/{num_iterations}")
 
-        # 进行多次遍历收集数据（并行化）
-        print(f"  收集数据中... (使用 {num_workers if num_workers else mp.cpu_count()} 个进程)")
-        parallel_cfr_traversals(
-            agent=agent,
-            iteration=iteration,
-            num_traversals=traversals_per_iteration,
-            num_players=num_players,
-            num_workers=num_workers
-        )
+        # 进行多次遍历收集数据
+        print("  收集数据中...")
+        for _ in range(traversals_per_iteration):
+            # 创建一个新的扑克游戏
+            state = pokers.State.from_seed(
+                n_players=num_players,
+                button=random.randint(0, num_players - 1),  # 随机选择按钮位置
+                sb=1,  # 小盲注
+                bb=2,  # 大盲注
+                stake=200.0,  # 初始筹码
+                seed=random.randint(0, 10000),  # 随机种子
+            )
+
+            # 执行CFR遍历以收集数据
+            agent.cfr_traverse(state, iteration, random_agents)
 
         # 记录遍历时间
         traversal_time = time.time() - start_time
@@ -1522,16 +1431,6 @@ if __name__ == "__main__":
         "注意：内存占用约为 memory_size * 1KB per sample",
     )
     parser.add_argument(
-        "--num-workers",
-        type=int,
-        default=None,
-        help="并行CFR遍历的进程数。默认使用所有CPU核心。\n"
-        "- None (默认): 自动检测CPU核心数\n"
-        "- 0: 串行模式（调试用）\n"
-        "- N: 使用N个进程并行\n"
-        "推荐: 32核CPU设置为16-24（预留资源给GPU训练）",
-    )
-    parser.add_argument(
         "--strict",
         action="store_true",
         help="启用严格的错误检查，对无效游戏状态抛出异常",
@@ -1591,8 +1490,6 @@ if __name__ == "__main__":
         print(f"日志将保存到: {args.log_dir}")
         print(f"模型将保存到: {args.save_dir}")
         print(f"经验回放缓冲区大小: {args.memory_size:,} 条")
-        workers = args.num_workers if args.num_workers is not None else mp.cpu_count()
-        print(f"并行进程数: {workers} 个")
 
         # 训练Deep CFR智能体
         agent, losses, profits = train_deep_cfr(
@@ -1603,7 +1500,6 @@ if __name__ == "__main__":
             save_dir=args.save_dir,
             log_dir=args.log_dir,
             memory_size=args.memory_size,
-            num_workers=args.num_workers,
             verbose=args.verbose,
         )
 
