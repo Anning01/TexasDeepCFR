@@ -6,3 +6,6 @@ models
 logs
 *.pyc
 TRAINING_GUIDE.md
+test_*.py
+!README.md
+*.md
