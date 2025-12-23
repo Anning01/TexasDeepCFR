@@ -188,6 +188,7 @@ def train_deep_cfr(
     player_id=0,
     save_dir="models",
     log_dir="logs/deepcfr",
+    memory_size=1000000,
     verbose=False,
 ):
     """
@@ -219,6 +220,7 @@ def train_deep_cfr(
     agent = DeepCFRAgent(
         player_id=player_id,
         num_players=num_players,
+        memory_size=memory_size,
         device="cuda" if torch.cuda.is_available() else "cpu",
     )
 
@@ -344,6 +346,7 @@ def continue_training(
     traversals_per_iteration=200,
     save_dir="models",
     log_dir="logs/deepcfr_continued",
+    memory_size=1000000,
     verbose=False,
 ):
     """
@@ -380,6 +383,7 @@ def continue_training(
     agent = DeepCFRAgent(
         player_id=player_id,
         num_players=num_players,
+        memory_size=memory_size,
         device="cuda" if torch.cuda.is_available() else "cpu",
     )
 
@@ -520,6 +524,7 @@ def train_against_checkpoint(
     traversals_per_iteration=200,
     save_dir="models",
     log_dir="logs/deepcfr_selfplay",
+    memory_size=1000000,
     verbose=False,
 ):
     """
@@ -554,12 +559,12 @@ def train_against_checkpoint(
     opponent_agents = []
     for pos in range(6):
         # 为每个位置创建一个新智能体
-        pos_agent = DeepCFRAgent(player_id=pos, num_players=6, device=device)
+        pos_agent = DeepCFRAgent(player_id=pos, num_players=6, memory_size=memory_size, device=device)
         pos_agent.load_model(checkpoint_path)  # 加载模型模型
         opponent_agents.append(pos_agent)
 
     # 初始化位置0的新学习智能体
-    learning_agent = DeepCFRAgent(player_id=0, num_players=6, device=device)
+    learning_agent = DeepCFRAgent(player_id=0, num_players=6, memory_size=memory_size, device=device)
 
     # 可选：从模型权重初始化学习智能体
     # 这将为它提供更好的起点
@@ -914,6 +919,7 @@ def train_with_mixed_checkpoints(
     log_dir="logs/deepcfr_mixed",
     refresh_interval=1000,
     num_opponents=5,
+    memory_size=1000000,
     verbose=False,
 ):
     """
@@ -949,7 +955,7 @@ def train_with_mixed_checkpoints(
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # 初始化学习智能体
-    learning_agent = DeepCFRAgent(player_id=0, num_players=6, device=device)
+    learning_agent = DeepCFRAgent(player_id=0, num_players=6, memory_size=memory_size, device=device)
 
     # 跟踪学习进度的变量
     losses = []  # 损失历史
@@ -1172,7 +1178,7 @@ def train_with_mixed_checkpoints(
 
                 # 创建并加载智能体
                 checkpoint_agent = DeepCFRAgent(
-                    player_id=current_pos, num_players=6, device=device
+                    player_id=current_pos, num_players=6, memory_size=memory_size, device=device
                 )
                 checkpoint_agent.load_model(checkpoint_file)
 
@@ -1415,6 +1421,16 @@ if __name__ == "__main__":
         "--num-opponents", type=int, default=5, help="要选择的模型对手数量"
     )
     parser.add_argument(
+        "--memory-size",
+        type=int,
+        default=1000000,
+        help="经验回放缓冲区大小（优势网络和策略网络各一个）。默认100万条。推荐根据服务器内存调整：\n"
+        "- 小内存 (8GB): 300,000\n"
+        "- 中等内存 (16-32GB): 1,000,000 (默认)\n"
+        "- 大内存 (64GB+): 5,000,000+\n"
+        "注意：内存占用约为 memory_size * 1KB per sample",
+    )
+    parser.add_argument(
         "--strict",
         action="store_true",
         help="启用严格的错误检查，对无效游戏状态抛出异常",
@@ -1443,6 +1459,7 @@ if __name__ == "__main__":
             log_dir=args.log_dir + "_mixed",
             refresh_interval=args.refresh_interval,
             num_opponents=args.num_opponents,
+            memory_size=args.memory_size,
             verbose=args.verbose,
         )
     elif args.checkpoint and args.self_play:
@@ -1453,6 +1470,7 @@ if __name__ == "__main__":
             traversals_per_iteration=args.traversals,
             save_dir=args.save_dir,
             log_dir=args.log_dir + "_selfplay",
+            memory_size=args.memory_size,
             verbose=args.verbose,
         )
     elif args.checkpoint:
@@ -1463,6 +1481,7 @@ if __name__ == "__main__":
             traversals_per_iteration=args.traversals,
             save_dir=args.save_dir,
             log_dir=args.log_dir + "_continued",
+            memory_size=args.memory_size,
             verbose=args.verbose,
         )
     else:
@@ -1470,6 +1489,7 @@ if __name__ == "__main__":
         print(f"每次迭代使用 {args.traversals} 次遍历")
         print(f"日志将保存到: {args.log_dir}")
         print(f"模型将保存到: {args.save_dir}")
+        print(f"经验回放缓冲区大小: {args.memory_size:,} 条")
 
         # 训练Deep CFR智能体
         agent, losses, profits = train_deep_cfr(
@@ -1479,6 +1499,7 @@ if __name__ == "__main__":
             player_id=0,
             save_dir=args.save_dir,
             log_dir=args.log_dir,
+            memory_size=args.memory_size,
             verbose=args.verbose,
         )
 

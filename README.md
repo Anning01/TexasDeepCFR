@@ -131,8 +131,29 @@ python -m main --models-dir models --position 0
 | `--checkpoint` | 检查点路径（用于继续训练） | None |
 | `--self-play` | 启用自博弈模式 | False |
 | `--mixed` | 启用混合对手模式 | False |
+| `--memory-size` | 经验回放缓冲区大小 | 1,000,000 |
 | `--verbose` | 显示详细输出 | False |
 | `--strict` | 启用严格错误检查 | False |
+
+### 内存配置建议
+
+`--memory-size` 参数控制优势网络和策略网络的经验回放缓冲区大小（各一个）。对于无限注德州扑克，推荐根据服务器内存调整：
+
+- **小内存 (8GB)**：`--memory-size 300000`（30万条，约300MB）
+- **中等内存 (16-32GB)**：`--memory-size 1000000`（100万条，约1GB，默认值）
+- **大内存 (64GB+)**：`--memory-size 5000000`（500万条，约5GB）
+- **超大内存 (128GB+)**：`--memory-size 10000000`（1000万条，约10GB）
+
+**示例**：
+```bash
+# 使用大内存服务器训练
+python -m train --iterations 10000 --memory-size 5000000
+
+# 小内存设备训练
+python -m train --iterations 1000 --memory-size 300000
+```
+
+**注意**：内存占用约为 `memory_size * 1KB per sample`，两个网络共用约 `2 * memory_size * 1KB`。
 
 ## 训练成本估算
 
@@ -140,7 +161,10 @@ python -m main --models-dir models --position 0
 
 - **单次迭代耗时**：~0.55秒
 - **每次迭代包含**：200次遍历
-- **内存占用**：优势网络和策略网络各300,000样本
+- **内存占用**：取决于 `--memory-size` 参数
+  - 默认配置（100万样本）：约2GB内存
+  - 大内存配置（500万样本）：约10GB内存
+  - 超大内存配置（1000万样本）：约20GB内存
 
 ### 规模化训练成本
 
