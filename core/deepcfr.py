@@ -723,7 +723,7 @@ class DeepCFRAgent:
                 return 0
 
     def train_advantage_network(
-        self, batch_size=128, epochs=3, beta_start=0.4, beta_end=1.0
+        self, batch_size=512, epochs=5, beta_start=0.4, beta_end=1.0
     ):
         """
         使用优先经验回放训练优势网络。
@@ -962,7 +962,7 @@ class DeepCFRAgent:
         # 返回平均损失
         return total_loss / epochs
 
-    def train_strategy_network(self, batch_size=128, epochs=3):
+    def train_strategy_network(self, batch_size=512, epochs=5):
         """
         使用收集的样本训练策略网络。
 
