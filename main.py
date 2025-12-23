@@ -318,13 +318,17 @@ def play_against_models(
         # 为了公平起见，旋转按钮位置
         button_pos = (num_games - 1) % 6
 
+        # 确定本局游戏的初始筹码
+        # 玩家使用当前余额，AI 使用标准初始筹码
+        game_stake = min(player_stake, initial_stake)  # 玩家最多带入当前余额
+
         # 创建一个新的扑克游戏
         state = pokers.State.from_seed(
             n_players=6,
             button=button_pos,
             sb=small_blind,
             bb=big_blind,
-            stake=initial_stake,
+            stake=game_stake,
             seed=random.randint(0, 10000),
         )
 
@@ -345,17 +349,18 @@ def play_against_models(
 
             # 应用操作
             new_state = state.apply_action(action)
-            if new_state.status != pokers.StateStatus.Ok:
+            # 只有 Invalid 状态才是错误，GameOver 是正常的游戏结束
+            if new_state.status == pokers.StateStatus.Invalid:
                 log_file = log_game_error(
-                    state, action, f"状态状态不是OK ({new_state.status})"
+                    state, action, f"状态无效 ({new_state.status})"
                 )
                 if STRICT_CHECKING:
                     raise ValueError(
-                        f"状态状态不是OK ({new_state.status})。详细信息记录到 {log_file}"
+                        f"状态无效 ({new_state.status})。详细信息记录到 {log_file}"
                     )
                 else:
                     print(
-                        f"警告: 状态状态不是OK ({new_state.status})。详细信息记录到 {log_file}"
+                        f"警告: 状态无效 ({new_state.status})。详细信息记录到 {log_file}"
                     )
                     break  # 在非严格模式下跳过此游戏
 
@@ -363,6 +368,14 @@ def play_against_models(
 
         # 游戏结束，显示结果
         print("\n--- 游戏结束 ---")
+
+        # 检查是否是 all-in showdown（所有决策完成但未发完所有牌）
+        all_players_decided = state._pk_state.actor_index is None
+        game_not_fully_complete = state._pk_state.status is True
+        if all_players_decided and game_not_fully_complete:
+            print("\n注意: 游戏因所有玩家完成下注而结束（all-in 或无更多行动）")
+            print("由于技术限制，未完成剩余公共牌的发放和最终结算")
+            print("显示的结果基于当前筹码状态\n")
 
         # 显示所有玩家的手牌
         print("最终手牌:")
@@ -417,8 +430,16 @@ class RandomAgent:
         if not state.legal_actions:
             raise ValueError(f"玩家 {self.player_id} 没有可用的合法操作")
 
+        # 如果可以 Check（免费看牌），移除 Fold 选项
+        available_actions = list(state.legal_actions)
+        if (
+            pokers.ActionEnum.Check in available_actions
+            and pokers.ActionEnum.Fold in available_actions
+        ):
+            available_actions.remove(pokers.ActionEnum.Fold)
+
         # 选择一个随机的合法操作
-        action_enum = random.choice(state.legal_actions)
+        action_enum = random.choice(available_actions)
 
         # 对于弃牌、过牌和跟注，不需要金额
         if action_enum == pokers.ActionEnum.Fold:

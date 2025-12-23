@@ -1488,5 +1488,3 @@ if __name__ == "__main__":
         print(f"最终平均利润 vs 随机: {profits[-1]:.2f}")
     if "profits_vs_checkpoints" in locals() and profits_vs_checkpoints:
         print(f"最终平均利润 vs 混合模型: {profits_vs_checkpoints[-1]:.2f}")
-
-

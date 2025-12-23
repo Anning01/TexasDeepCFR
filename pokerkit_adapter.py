@@ -14,8 +14,10 @@ from pokerkit.notation import HandHistory
 
 # ===== 枚举定义 =====
 
+
 class ActionEnum(IntEnum):
     """动作类型枚举（与pokers-db兼容）"""
+
     Fold = 0
     Check = 1
     Call = 2
@@ -24,6 +26,7 @@ class ActionEnum(IntEnum):
 
 class Stage(IntEnum):
     """游戏阶段枚举"""
+
     Preflop = 0
     Flop = 1
     Turn = 2
@@ -33,6 +36,7 @@ class Stage(IntEnum):
 
 class StateStatus(IntEnum):
     """状态状态枚举"""
+
     Ok = 0
     Invalid = 1
     GameOver = 2
@@ -40,32 +44,47 @@ class StateStatus(IntEnum):
 
 # ===== 数据类 =====
 
+
 class Card:
     """扑克牌类"""
-    SUIT_MAP = {'s': 3, 'h': 2, 'd': 1, 'c': 0}  # PokerKit使用小写
-    RANK_MAP = {'2': 0, '3': 1, '4': 2, '5': 3, '6': 4, '7': 5, '8': 6,
-                '9': 7, 'T': 8, 'J': 9, 'Q': 10, 'K': 11, 'A': 12}
+
+    SUIT_MAP = {"s": 3, "h": 2, "d": 1, "c": 0}  # PokerKit使用小写
+    RANK_MAP = {
+        "2": 0,
+        "3": 1,
+        "4": 2,
+        "5": 3,
+        "6": 4,
+        "7": 5,
+        "8": 6,
+        "9": 7,
+        "T": 8,
+        "J": 9,
+        "Q": 10,
+        "K": 11,
+        "A": 12,
+    }
 
     def __init__(self, pokerkit_card):
         """
         从PokerKit的卡牌对象或字符串创建Card对象
-        
+
         参数:
             pokerkit_card: PokerKit的Card对象，或简短字符串形式如 'As', '2h'
         """
         # 如果是PokerKit Card对象，使用repr()获取简短形式
-        if hasattr(pokerkit_card, 'rank') and hasattr(pokerkit_card, 'suit'):
+        if hasattr(pokerkit_card, "rank") and hasattr(pokerkit_card, "suit"):
             # 这是一个PokerKit Card对象，使用repr()
             card_str = repr(pokerkit_card)  # 返回如 'As', '2h' 的形式
         else:
             # 假设是字符串
             card_str = str(pokerkit_card)
-        
+
         # 提取卡牌简写（处理括号形式）
         # 例如："ACE OF SPADES (As)" -> "As"
-        if '(' in card_str and ')' in card_str:
-            card_str = card_str.split('(')[1].split(')')[0]
-        
+        if "(" in card_str and ")" in card_str:
+            card_str = card_str.split("(")[1].split(")")[0]
+
         if not card_str or len(card_str) < 2:
             raise ValueError(f"Invalid card string: {card_str}")
 
@@ -78,14 +97,35 @@ class Card:
 
     def __repr__(self):
         suits = {0: "♣", 1: "♦", 2: "♥", 3: "♠"}
-        ranks = {0: "2", 1: "3", 2: "4", 3: "5", 4: "6", 5: "7", 6: "8",
-                7: "9", 8: "10", 9: "J", 10: "Q", 11: "K", 12: "A"}
+        ranks = {
+            0: "2",
+            1: "3",
+            2: "4",
+            3: "5",
+            4: "6",
+            5: "7",
+            6: "8",
+            7: "9",
+            8: "10",
+            9: "J",
+            10: "Q",
+            11: "K",
+            12: "A",
+        }
         return f"{ranks[self.rank]}{suits[self.suit]}"
 
 
 class PlayerState:
     """玩家状态类"""
-    def __init__(self, player_id: int, chips: float, bet: float, active: bool, hand: List[Card] = None):
+
+    def __init__(
+        self,
+        player_id: int,
+        chips: float,
+        bet: float,
+        active: bool,
+        hand: List[Card] = None,
+    ):
         self.player = player_id
         self.stake = chips  # 剩余筹码
         self.bet_chips = bet  # 当前轮下注
@@ -97,6 +137,7 @@ class PlayerState:
 
 class Action:
     """动作类"""
+
     def __init__(self, action: ActionEnum, amount: float = 0.0):
         self.action = action
         self.amount = amount  # 对于Raise，这是额外加注的金额（相对于跟注之后）
@@ -109,6 +150,7 @@ class Action:
 
 class ActionRecord:
     """动作记录"""
+
     def __init__(self, player_id: int, action: Action):
         self.player_id = player_id
         self.action = action
@@ -116,16 +158,24 @@ class ActionRecord:
 
 # ===== 主状态类 =====
 
+
 class State:
     """
     游戏状态类 - 包装PokerKit环境
     提供与pokers-db兼容的API，支持6人无限注德州扑克
-    
+
     注意：所有状态属性都是动态的，每次访问时从底层PokerKit状态读取
     """
 
-    def __init__(self, pokerkit_state: PokerKitState, initial_stacks: List[float],
-                 button: int, sb: float, bb: float, seed: int):
+    def __init__(
+        self,
+        pokerkit_state: PokerKitState,
+        initial_stacks: List[float],
+        button: int,
+        sb: float,
+        bb: float,
+        seed: int,
+    ):
         """不要直接调用，使用State.from_seed()"""
         self._pk_state = pokerkit_state
         self._initial_stacks = initial_stacks
@@ -136,8 +186,9 @@ class State:
         self.from_action = None  # 上一个动作记录
 
     @classmethod
-    def from_seed(cls, n_players: int, button: int, sb: float, bb: float,
-                  stake: float, seed: int) -> 'State':
+    def from_seed(
+        cls, n_players: int, button: int, sb: float, bb: float, stake: float, seed: int
+    ) -> "State":
         """
         创建一个新的游戏状态（与pokers-db API兼容）
 
@@ -193,7 +244,9 @@ class State:
     @property
     def current_player(self) -> int:
         """当前需要行动的玩家索引"""
-        return self._pk_state.actor_index if self._pk_state.actor_index is not None else 0
+        return (
+            self._pk_state.actor_index if self._pk_state.actor_index is not None else 0
+        )
 
     @property
     def pot(self) -> float:
@@ -257,7 +310,7 @@ class State:
 
         # PokerKit使用street_index来表示阶段
         # 0: preflop, 1: flop, 2: turn, 3: river
-        if not hasattr(pk, 'street_index') or pk.street_index is None:
+        if not hasattr(pk, "street_index") or pk.street_index is None:
             return Stage.Preflop
 
         street = pk.street_index
@@ -278,7 +331,7 @@ class State:
         cards = []
 
         # PokerKit的board_cards是按street组织的列表的列表
-        if hasattr(pk, 'board_cards') and pk.board_cards:
+        if hasattr(pk, "board_cards") and pk.board_cards:
             for street_cards in pk.board_cards:
                 if street_cards:
                     for card in street_cards:
@@ -296,9 +349,11 @@ class State:
         player_states = []
 
         n_players = len(self._initial_stacks)
-        
-        # 直接检查 PokerKit 状态，避免使用 property
-        is_final = (pk.status is False)
+
+        # 检查游戏是否真正结束（使用与 final_state property 相同的逻辑）
+        is_final = (pk.status is False) or (
+            pk.actor_index is None and not self._get_legal_actions()
+        )
 
         for i in range(n_players):
             # 获取筹码
@@ -313,7 +368,7 @@ class State:
 
             # 获取手牌（仅当我们能看到时）
             hand_cards = []
-            if hasattr(pk, 'hole_cards') and i < len(pk.hole_cards):
+            if hasattr(pk, "hole_cards") and i < len(pk.hole_cards):
                 hole = pk.hole_cards[i]
                 if hole:
                     for card in hole:
@@ -339,10 +394,10 @@ class State:
     def _get_legal_actions(self) -> List[ActionEnum]:
         """获取合法动作列表"""
         pk = self._pk_state
-        
+
         # 直接检查 PokerKit 状态，避免使用 property 导致循环
-        is_final = (pk.status is False)
-        
+        is_final = pk.status is False
+
         if is_final:
             return []
 
@@ -353,7 +408,7 @@ class State:
         legal = []
 
         # Fold - 使用 can_fold() 方法检查
-        if hasattr(pk, 'can_fold') and pk.can_fold():
+        if hasattr(pk, "can_fold") and pk.can_fold():
             legal.append(ActionEnum.Fold)
 
         # Check/Call - 使用 can_check_or_call() 方法检查
@@ -369,7 +424,7 @@ class State:
 
         return legal
 
-    def apply_action(self, action: Action) -> 'State':
+    def apply_action(self, action: Action) -> "State":
         """
         应用动作并返回新状态
 
@@ -386,19 +441,34 @@ class State:
 
         # 创建PokerKit状态的副本（始终创建副本以避免状态共享）
         import copy
+
         new_pk_state = copy.deepcopy(pk)
 
         # 首先检查游戏是否已经结束
         if new_pk_state.status is False:
             print(f"警告: 游戏已经结束，无法应用动作 {action}")
-            new_state = State(new_pk_state, self._initial_stacks, self.button, self.sb, self.bb, self._seed)
+            new_state = State(
+                new_pk_state,
+                self._initial_stacks,
+                self.button,
+                self.sb,
+                self.bb,
+                self._seed,
+            )
             new_state.from_action = ActionRecord(current_player_id, action)
             return new_state
 
         # 检查是否有玩家需要行动
         if new_pk_state.actor_index is None:
             print(f"警告: 没有玩家需要行动（自动化阶段），无法应用动作 {action}")
-            new_state = State(new_pk_state, self._initial_stacks, self.button, self.sb, self.bb, self._seed)
+            new_state = State(
+                new_pk_state,
+                self._initial_stacks,
+                self.button,
+                self.sb,
+                self.bb,
+                self._seed,
+            )
             new_state.from_action = ActionRecord(current_player_id, action)
             return new_state
 
@@ -415,14 +485,26 @@ class State:
 
                 # 获取当前玩家状态
                 actor_idx = new_pk_state.actor_index
-                current_bet = float(new_pk_state.bets[actor_idx]) if actor_idx is not None else 0.0
-                current_stack = float(new_pk_state.stacks[actor_idx]) if actor_idx is not None else 0.0
+                current_bet = (
+                    float(new_pk_state.bets[actor_idx])
+                    if actor_idx is not None
+                    else 0.0
+                )
+                current_stack = (
+                    float(new_pk_state.stacks[actor_idx])
+                    if actor_idx is not None
+                    else 0.0
+                )
 
                 # 玩家总共可以下注的最大金额（剩余筹码 + 已下注）
                 max_possible_bet = current_stack + current_bet
 
                 # 计算需要跟注的金额（额外投入）
-                call_amount = float(new_pk_state.checking_or_calling_amount) if new_pk_state.checking_or_calling_amount else 0.0
+                call_amount = (
+                    float(new_pk_state.checking_or_calling_amount)
+                    if new_pk_state.checking_or_calling_amount
+                    else 0.0
+                )
 
                 # 计算总下注目标 = 当前已下注 + 需要跟注 + 额外加注
                 total_target = current_bet + call_amount + action.amount
@@ -431,7 +513,11 @@ class State:
                 total_target = min(total_target, max_possible_bet)
 
                 # 获取最小加注要求（如果有）
-                min_raise = float(new_pk_state.min_completion_betting_or_raising_to_amount) if new_pk_state.min_completion_betting_or_raising_to_amount else None
+                min_raise = (
+                    float(new_pk_state.min_completion_betting_or_raising_to_amount)
+                    if new_pk_state.min_completion_betting_or_raising_to_amount
+                    else None
+                )
 
                 if min_raise is not None:
                     # 如果玩家筹码不够达到最小加注，只能全下
@@ -446,7 +532,14 @@ class State:
                 new_pk_state.complete_bet_or_raise_to(int(total_target))
 
             # 创建新的State对象
-            new_state = State(new_pk_state, self._initial_stacks, self.button, self.sb, self.bb, self._seed)
+            new_state = State(
+                new_pk_state,
+                self._initial_stacks,
+                self.button,
+                self.sb,
+                self.bb,
+                self._seed,
+            )
             new_state.from_action = ActionRecord(current_player_id, action)
 
             return new_state
@@ -454,9 +547,17 @@ class State:
         except Exception as e:
             print(f"应用动作时出错: {e}, action={action}")
             import traceback
+
             traceback.print_exc()
             # 返回一个标记为无效的状态
-            new_state = State(new_pk_state, self._initial_stacks, self.button, self.sb, self.bb, self._seed)
+            new_state = State(
+                new_pk_state,
+                self._initial_stacks,
+                self.button,
+                self.sb,
+                self.bb,
+                self._seed,
+            )
             new_state.from_action = ActionRecord(current_player_id, action)
             return new_state
 
@@ -471,7 +572,9 @@ def visualize_state(state: State):
     print(f"公共牌: {[str(c) for c in state.public_cards]}")
     print(f"合法动作: {[ActionEnum(a).name for a in state.legal_actions]}")
     for ps in state.players_state:
-        print(f"玩家 {ps.player}: 筹码=${ps.stake:.2f}, 下注=${ps.bet_chips:.2f}, 活跃={ps.active}, 手牌={[str(c) for c in ps.hand]}")
+        print(
+            f"玩家 {ps.player}: 筹码=${ps.stake:.2f}, 下注=${ps.bet_chips:.2f}, 活跃={ps.active}, 手牌={[str(c) for c in ps.hand]}"
+        )
 
 
 def visualize_trace(states: List[State]):

@@ -5,3 +5,4 @@ models
 .serena
 logs
 *.pyc
+TRAINING_GUIDE.md

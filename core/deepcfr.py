@@ -691,7 +691,9 @@ class DeepCFRAgent:
                 # 如果没有合法动作（自动化阶段或游戏结束），返回0
                 if action is None:
                     if VERBOSE:
-                        print(f"随机智能体在深度 {depth} 处没有可用动作（可能是自动化阶段）")
+                        print(
+                            f"随机智能体在深度 {depth} 处没有可用动作（可能是自动化阶段）"
+                        )
                     return 0
 
                 new_state = state.apply_action(action)
@@ -1099,7 +1101,7 @@ class DeepCFRAgent:
 
     def load_model(self, path):
         """从磁盘加载模型。"""
-        checkpoint = torch.load(path)
+        checkpoint = torch.load(path, weights_only=False)
         self.iteration_count = checkpoint["iteration"]
         self.advantage_net.load_state_dict(checkpoint["advantage_net"])
         self.strategy_net.load_state_dict(checkpoint["strategy_net"])

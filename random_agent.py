@@ -27,7 +27,10 @@ class RandomAgent:
         # 如果可以 Check（免费看牌），移除 Fold 选项
         # 避免在可以免费看牌时弃牌（PokerKit 会警告并可能导致状态错误）
         available_actions = list(state.legal_actions)
-        if pokers.ActionEnum.Check in available_actions and pokers.ActionEnum.Fold in available_actions:
+        if (
+            pokers.ActionEnum.Check in available_actions
+            and pokers.ActionEnum.Fold in available_actions
+        ):
             available_actions.remove(pokers.ActionEnum.Fold)
 
         # 从可用操作中选择一个随机的合法操作类型
@@ -173,4 +176,6 @@ class RandomAgent:
             if pokers.ActionEnum.Fold in state.legal_actions:
                 return pokers.Action(pokers.ActionEnum.Fold)
             else:  # 最后手段
-                return pokers.Action(pokers.ActionEnum.Check)  # 如果弃牌不合法，则选择过牌  # 如果弃牌不合法，则选择过牌
+                return pokers.Action(
+                    pokers.ActionEnum.Check
+                )  # 如果弃牌不合法，则选择过牌  # 如果弃牌不合法，则选择过牌
