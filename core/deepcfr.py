@@ -69,7 +69,9 @@ class PrioritizedMemory:
 
         # Convert priorities to probabilities
         total_priority = sum(self.priorities)
-        probabilities = [p / total_priority for p in self.priorities]
+        probabilities = np.array([p / total_priority for p in self.priorities])
+        # 修复浮点精度问题，确保概率总和为1
+        probabilities = probabilities / probabilities.sum()
 
         # Sample indices based on priorities
         indices = np.random.choice(

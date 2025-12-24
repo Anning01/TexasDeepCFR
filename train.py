@@ -611,6 +611,7 @@ def train_against_checkpoint(
     def self_play_cfr_traverse(self, state, iteration, opponent_agents, depth=0):
         """
         修改后的CFR遍历方法，确保每个智能体都有正确的状态视角。
+        与原始cfr_traverse保持一致，但使用传入的opponent_agents。
         """
         # 添加递归深度保护
         max_depth = 1000
@@ -631,9 +632,9 @@ def train_against_checkpoint(
 
         # 如果轮到训练智能体行动
         if current_player == self.player_id:
-            legal_action_ids = self.get_legal_action_ids(state)
+            legal_action_types = self.get_legal_action_types(state)
 
-            if not legal_action_ids:
+            if not legal_action_types:
                 if verbose:
                     print(
                         f"警告: 在深度 {depth} 为玩家 {current_player} 找不到合法行动"
@@ -645,15 +646,16 @@ def train_against_checkpoint(
                 self.device
             )
 
-            # 从网络获取优势值
+            # 从网络获取优势值和下注大小预测
             with torch.no_grad():
-                advantages = self.advantage_net(state_tensor.unsqueeze(0))[0]
+                advantages, bet_size_pred = self.advantage_net(state_tensor.unsqueeze(0))
+                advantages = advantages[0].cpu().numpy()
+                bet_size_multiplier = bet_size_pred[0][0].item()
 
             # 使用遗憾匹配计算策略
-            advantages_np = advantages.cpu().numpy()
             advantages_masked = np.zeros(self.num_actions)
-            for a in legal_action_ids:
-                advantages_masked[a] = max(advantages_np[a], 0)  # 仅保留正的优势值
+            for a in legal_action_types:
+                advantages_masked[a] = max(advantages[a], 0)  # 仅保留正的优势值
 
             # 根据策略选择行动
             if sum(advantages_masked) > 0:
@@ -661,44 +663,52 @@ def train_against_checkpoint(
             else:
                 # 如果所有优势值都非正，则使用均匀分布
                 strategy = np.zeros(self.num_actions)
-                for a in legal_action_ids:
-                    strategy[a] = 1.0 / len(legal_action_ids)
+                for a in legal_action_types:
+                    strategy[a] = 1.0 / len(legal_action_types)
 
             # 选择行动并遍历
             action_values = np.zeros(self.num_actions)
-            for action_id in legal_action_ids:
+            for action_type in legal_action_types:
                 try:
-                    pokers_action = self.action_id_to_pokers_action(action_id, state)
+                    # 对加注动作使用预测的下注大小
+                    if action_type == 2:  # 加注
+                        pokers_action = self.action_type_to_pokers_action(
+                            action_type, state, bet_size_multiplier
+                        )
+                    else:
+                        pokers_action = self.action_type_to_pokers_action(
+                            action_type, state
+                        )
                     new_state = state.apply_action(pokers_action)
 
                     # 检查行动是否有效（只有 Invalid 才是错误）
                     if new_state.status == pokers.StateStatus.Invalid:
                         if verbose:
                             print(
-                                f"警告: 在深度 {depth} 处行动 {action_id} 无效。状态: {new_state.status}"
+                                f"警告: 在深度 {depth} 处行动 {action_type} 无效。状态: {new_state.status}"
                             )
                         continue
 
                     # 递归调用cfr_traverse进行下一个状态的遍历
-                    action_values[action_id] = self.cfr_traverse(
+                    action_values[action_type] = self.cfr_traverse(
                         new_state, iteration, opponent_agents, depth + 1
                     )
                 except Exception as e:
                     if verbose:
-                        print(f"行动 {action_id} 的遍历出错: {e}")
-                    action_values[action_id] = 0
+                        print(f"行动 {action_type} 的遍历出错: {e}")
+                    action_values[action_type] = 0
 
             # 计算反事实遗憾并添加到内存
             ev = sum(
-                strategy[a] * action_values[a] for a in legal_action_ids
+                strategy[a] * action_values[a] for a in legal_action_types
             )  # 期望收益
 
             # 计算归一化因子
             max_abs_val = max(abs(max(action_values)), abs(min(action_values)), 1.0)
 
-            for action_id in legal_action_ids:
+            for action_type in legal_action_types:
                 # 计算遗憾值
-                regret = action_values[action_id] - ev
+                regret = action_values[action_type] - ev
 
                 # 归一化并裁剪遗憾值
                 normalized_regret = regret / max_abs_val
@@ -706,25 +716,46 @@ def train_against_checkpoint(
 
                 # 应用缩放因子
                 scale_factor = np.sqrt(iteration) if iteration > 1 else 1.0
+                weighted_regret = clipped_regret * scale_factor
 
-                # 将数据添加到优势网络内存
-                self.advantage_memory.add(
-                    (
-                        encode_state(state, self.player_id),  # 从该智能体的视角编码
-                        action_id,
-                        clipped_regret * scale_factor,
+                # 以遗憾大小作为优先级
+                priority = abs(weighted_regret) + 0.01
+
+                # 将数据添加到优势网络内存 (匹配原始cfr_traverse格式)
+                if action_type == 2:  # 加注动作
+                    self.advantage_memory.add(
+                        (
+                            encode_state(state, self.player_id),
+                            np.zeros(20),  # 对手特征占位符
+                            action_type,
+                            bet_size_multiplier,
+                            weighted_regret,
+                        ),
+                        priority,
                     )
-                )
+                else:
+                    self.advantage_memory.add(
+                        (
+                            encode_state(state, self.player_id),
+                            np.zeros(20),  # 对手特征占位符
+                            action_type,
+                            0.0,  # 非加注动作的默认下注大小
+                            weighted_regret,
+                        ),
+                        priority,
+                    )
 
             # 将策略添加到策略网络内存
             strategy_full = np.zeros(self.num_actions)
-            for a in legal_action_ids:
+            for a in legal_action_types:
                 strategy_full[a] = strategy[a]
 
             self.strategy_memory.append(
                 (
-                    encode_state(state, self.player_id),  # 从该智能体的视角编码
+                    encode_state(state, self.player_id),
+                    np.zeros(20),  # 对手特征占位符
                     strategy_full,
+                    bet_size_multiplier if 2 in legal_action_types else 0.0,
                     iteration,
                 )
             )
