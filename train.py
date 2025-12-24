@@ -63,7 +63,7 @@ def evaluate_against_random(agent, num_games=500, num_players=6):
                             f"警告: 游戏 {game} 中状态错误 ({new_state.status}). 详细信息记录在 {log_file}"
                         )
                         break  # 非严格模式下跳过本局游戏
-                state = new_state  # 更新游戏状态
+                state = new_state  # 更新新游戏状态
 
             # 只统计已完成的游戏
             if state.final_state:
@@ -708,7 +708,7 @@ def train_against_checkpoint(
                 scale_factor = np.sqrt(iteration) if iteration > 1 else 1.0
 
                 # 将数据添加到优势网络内存
-                self.advantage_memory.append(
+                self.advantage_memory.add(
                     (
                         encode_state(state, self.player_id),  # 从该智能体的视角编码
                         action_id,
@@ -1078,7 +1078,7 @@ def train_with_mixed_checkpoints(
                 # 应用缩放因子
                 scale_factor = np.sqrt(iteration) if iteration > 1 else 1.0
 
-                self.advantage_memory.append(
+                self.advantage_memory.add(
                     (
                         encode_state(
                             state, self.player_id
