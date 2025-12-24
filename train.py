@@ -373,9 +373,9 @@ def continue_training(
     # 初始化TensorBoard写入器
     writer = SummaryWriter(log_dir)
 
-    # 加载模型
+    # 加载模型 (自动检测设备，兼容CPU/GPU)
     print(f"从 {checkpoint_path} 加载模型")
-    checkpoint = torch.load(checkpoint_path)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
 
     # 初始化智能体
     num_players = 6  # 与原始训练保持一致，假设6名玩家

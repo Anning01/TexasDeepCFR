@@ -1103,7 +1103,7 @@ class DeepCFRAgent:
 
     def load_model(self, path):
         """从磁盘加载模型。"""
-        checkpoint = torch.load(path, weights_only=False)
+        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
         self.iteration_count = checkpoint["iteration"]
         self.advantage_net.load_state_dict(checkpoint["advantage_net"])
         self.strategy_net.load_state_dict(checkpoint["strategy_net"])
