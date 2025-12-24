@@ -634,14 +634,14 @@ class DeepCFRAgent:
 
                 # 归一化并裁剪遗憾
                 normalized_regret = regret / max_abs_val
-                clipped_regret = np.clip(normalized_regret, -10.0, 10.0)
+                clipped_regret = np.clip(normalized_regret, -1.0, 1.0)  # 裁剪到[-1, 1]范围
 
-                # 应用缩放
-                scale_factor = np.sqrt(iteration) if iteration > 1 else 1.0  # 线性CFR
-                weighted_regret = clipped_regret * scale_factor
+                # Linear CFR: 使用迭代次数作为采样优先级权重，而不是放大遗憾值
+                # 这样可以让后期样本更重要，但不会导致数值爆炸
+                iteration_weight = np.sqrt(iteration) if iteration > 1 else 1.0
 
-                # 以遗憾大小作为优先级存储在优先记忆中
-                priority = abs(weighted_regret) + 0.01  # 添加小常数以确保非零优先级
+                # 以遗憾大小和迭代权重作为优先级存储在优先记忆中
+                priority = (abs(clipped_regret) + 0.01) * iteration_weight
 
                 # 对于加注动作，存储下注大小乘数
                 if action_type == 2:
@@ -651,7 +651,7 @@ class DeepCFRAgent:
                             np.zeros(20),  # 对手特征的占位符
                             action_type,
                             bet_size_multiplier,
-                            weighted_regret,
+                            clipped_regret,
                         ),
                         priority,
                     )
@@ -662,7 +662,7 @@ class DeepCFRAgent:
                             np.zeros(20),  # 对手特征的占位符
                             action_type,
                             0.0,  # 非加注动作的默认下注大小
-                            weighted_regret,
+                            clipped_regret,
                         ),
                         priority,
                     )

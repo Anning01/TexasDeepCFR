@@ -710,16 +710,15 @@ def train_against_checkpoint(
                 # 计算遗憾值
                 regret = action_values[action_type] - ev
 
-                # 归一化并裁剪遗憾值
+                # 归一化并裁剪遗憾值到[-1, 1]范围
                 normalized_regret = regret / max_abs_val
-                clipped_regret = np.clip(normalized_regret, -10.0, 10.0)
+                clipped_regret = np.clip(normalized_regret, -1.0, 1.0)
 
-                # 应用缩放因子
-                scale_factor = np.sqrt(iteration) if iteration > 1 else 1.0
-                weighted_regret = clipped_regret * scale_factor
+                # Linear CFR: 使用迭代次数作为采样优先级权重，而不是放大遗憾值
+                iteration_weight = np.sqrt(iteration) if iteration > 1 else 1.0
 
-                # 以遗憾大小作为优先级
-                priority = abs(weighted_regret) + 0.01
+                # 以遗憾大小和迭代权重作为优先级
+                priority = (abs(clipped_regret) + 0.01) * iteration_weight
 
                 # 将数据添加到优势网络内存 (匹配原始cfr_traverse格式)
                 if action_type == 2:  # 加注动作
@@ -729,7 +728,7 @@ def train_against_checkpoint(
                             np.zeros(20),  # 对手特征占位符
                             action_type,
                             bet_size_multiplier,
-                            weighted_regret,
+                            clipped_regret,
                         ),
                         priority,
                     )
@@ -740,7 +739,7 @@ def train_against_checkpoint(
                             np.zeros(20),  # 对手特征占位符
                             action_type,
                             0.0,  # 非加注动作的默认下注大小
-                            weighted_regret,
+                            clipped_regret,
                         ),
                         priority,
                     )
@@ -1102,21 +1101,24 @@ def train_with_mixed_checkpoints(
                 # 计算遗憾
                 regret = action_values[action_id] - ev
 
-                # 归一化和裁剪遗憾
+                # 归一化并裁剪遗憾值到[-1, 1]范围
                 normalized_regret = regret / max_abs_val
-                clipped_regret = np.clip(normalized_regret, -10.0, 10.0)
+                clipped_regret = np.clip(normalized_regret, -1.0, 1.0)
 
-                # 应用缩放因子
-                scale_factor = np.sqrt(iteration) if iteration > 1 else 1.0
+                # Linear CFR: 使用迭代次数作为采样优先级权重，而不是放大遗憾值
+                iteration_weight = np.sqrt(iteration) if iteration > 1 else 1.0
+                priority = (abs(clipped_regret) + 0.01) * iteration_weight
 
+                # 添加到优势网络内存 (匹配原始cfr_traverse格式: 5个值)
                 self.advantage_memory.add(
                     (
-                        encode_state(
-                            state, self.player_id
-                        ),  # 从当前智能体的角度编码状态
+                        encode_state(state, self.player_id),
+                        np.zeros(20),  # 对手特征占位符
                         action_id,
-                        clipped_regret * scale_factor,
-                    )
+                        0.0,  # 下注大小占位符
+                        clipped_regret,
+                    ),
+                    priority,
                 )
 
             # 添加到策略内存
@@ -1126,8 +1128,10 @@ def train_with_mixed_checkpoints(
 
             self.strategy_memory.append(
                 (
-                    encode_state(state, self.player_id),  # 从当前智能体的角度编码状态
+                    encode_state(state, self.player_id),
+                    np.zeros(20),  # 对手特征占位符
                     strategy_full,
+                    0.0,  # 下注大小占位符
                     iteration,
                 )
             )
