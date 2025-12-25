@@ -150,9 +150,9 @@ class DeepCFRAgent:
             input_size=input_size, hidden_size=256, num_actions=self.num_actions
         ).to(device)
 
-        # 使用较小的学习率以获得更稳定的训练
+        # 优势网络学习率 - 1e-4 是 Deep CFR 论文的推荐值
         self.optimizer = optim.Adam(
-            self.advantage_net.parameters(), lr=1e-6, weight_decay=1e-5
+            self.advantage_net.parameters(), lr=1e-4, weight_decay=1e-5
         )
 
         # 创建优先记忆缓冲器
@@ -162,8 +162,9 @@ class DeepCFRAgent:
         self.strategy_net = PokerNetwork(
             input_size=input_size, hidden_size=256, num_actions=self.num_actions
         ).to(device)
+        # 策略网络学习率略低于优势网络，因为它需要更稳定
         self.strategy_optimizer = optim.Adam(
-            self.strategy_net.parameters(), lr=0.00005, weight_decay=1e-5
+            self.strategy_net.parameters(), lr=5e-5, weight_decay=1e-5
         )
         self.strategy_memory = deque(maxlen=memory_size)
 
