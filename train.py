@@ -189,6 +189,7 @@ def train_deep_cfr(
     save_dir="models",
     log_dir="logs/deepcfr",
     memory_size=1000000,
+    network_size="medium",
     verbose=False,
 ):
     """
@@ -222,6 +223,7 @@ def train_deep_cfr(
         num_players=num_players,
         memory_size=memory_size,
         device="cuda" if torch.cuda.is_available() else "cpu",
+        network_size=network_size,
     )
 
     # 创建随机策略对手
@@ -230,6 +232,7 @@ def train_deep_cfr(
     # 用于跟踪学习进度
     losses = []  # 损失记录
     profits = []  # 利润记录
+
     print(f"玩家: {num_players}")
     # 在训练开始前进行初始评估
     print("初始评估中...")
@@ -375,7 +378,7 @@ def continue_training(
 
     # 加载模型 (自动检测设备，兼容CPU/GPU)
     print(f"从 {checkpoint_path} 加载模型")
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    checkpoint = torch.load(checkpoint_path, map_location="cuda" if torch.cuda.is_available() else "cpu", weights_only=False)
 
     # 初始化智能体
     num_players = 6  # 与原始训练保持一致，假设6名玩家
@@ -950,6 +953,7 @@ def train_with_mixed_checkpoints(
     refresh_interval=1000,
     num_opponents=5,
     memory_size=1000000,
+    network_size="medium",
     verbose=False,
 ):
     """
@@ -985,7 +989,7 @@ def train_with_mixed_checkpoints(
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # 初始化学习智能体
-    learning_agent = DeepCFRAgent(player_id=0, num_players=6, memory_size=memory_size, device=device)
+    learning_agent = DeepCFRAgent(player_id=0, num_players=6, memory_size=memory_size, device=device, network_size=network_size)
 
     # 跟踪学习进度的变量
     losses = []  # 损失历史
@@ -1036,9 +1040,9 @@ def train_with_mixed_checkpoints(
 
         # 如果轮到训练智能体行动
         if current_player == self.player_id:
-            legal_action_ids = self.get_legal_action_ids(state)
+            legal_action_types = self.get_legal_action_types(state)
 
-            if not legal_action_ids:
+            if not legal_action_types:
                 if verbose:
                     print(
                         f"警告: 在深度 {depth} 为玩家 {current_player} 找不到合法行动"
@@ -1050,80 +1054,97 @@ def train_with_mixed_checkpoints(
                 self.device
             )
 
-            # 从网络获取优势值
+            # 从网络获取优势值和下注大小预测
             with torch.no_grad():
-                advantages = self.advantage_net(state_tensor.unsqueeze(0))[0]
+                advantages, bet_size_pred = self.advantage_net(state_tensor.unsqueeze(0))
+                advantages = advantages[0].cpu().numpy()
+                bet_size_multiplier = bet_size_pred[0][0].item()
 
             # 使用遗憾匹配来计算策略
-            advantages_np = advantages.cpu().numpy()
             advantages_masked = np.zeros(self.num_actions)
-            for a in legal_action_ids:
-                advantages_masked[a] = max(advantages_np[a], 0)
+            for a in legal_action_types:
+                advantages_masked[a] = max(advantages[a], 0)
 
             # 根据策略选择动作
             if sum(advantages_masked) > 0:
                 strategy = advantages_masked / sum(advantages_masked)
             else:
                 strategy = np.zeros(self.num_actions)
-                for a in legal_action_ids:
-                    strategy[a] = 1.0 / len(legal_action_ids)
+                for a in legal_action_types:
+                    strategy[a] = 1.0 / len(legal_action_types)
 
             # Choose actions and traverse
             action_values = np.zeros(self.num_actions)
-            for action_id in legal_action_ids:
+            for action_type in legal_action_types:
                 try:
-                    pokers_action = self.action_id_to_pokers_action(action_id, state)
+                    # 对加注动作使用预测的下注大小
+                    if action_type == 2:  # 加注
+                        pokers_action = self.action_type_to_pokers_action(
+                            action_type, state, bet_size_multiplier
+                        )
+                    else:
+                        pokers_action = self.action_type_to_pokers_action(action_type, state)
                     new_state = state.apply_action(pokers_action)
 
                     # Check if the action was valid (only Invalid is an error)
                     if new_state.status == pokers.StateStatus.Invalid:
                         if verbose:
                             print(
-                                f"WARNING: Invalid action {action_id} at depth {depth}. Status: {new_state.status}"
+                                f"WARNING: Invalid action {action_type} at depth {depth}. Status: {new_state.status}"
                             )
                         continue
 
-                    action_values[action_id] = self.cfr_traverse(
+                    action_values[action_type] = self.cfr_traverse(
                         new_state, iteration, opponent_agents, depth + 1
                     )
                 except Exception as e:
                     if verbose:
-                        print(f"ERROR in traversal for action {action_id}: {e}")
-                    action_values[action_id] = 0
+                        print(f"ERROR in traversal for action {action_type}: {e}")
+                    action_values[action_type] = 0
 
             # 计算反事实遗憾并添加到内存
-            ev = sum(strategy[a] * action_values[a] for a in legal_action_ids)
+            ev = sum(strategy[a] * action_values[a] for a in legal_action_types)
 
-            # 计算归一化因子
-            max_abs_val = max(abs(max(action_values)), abs(min(action_values)), 1.0)
+            # 使用筹码量级归一化（与 deepcfr.py 保持一致）
+            stake_normalizer = 200.0  # 初始筹码
 
-            for action_id in legal_action_ids:
-                # 计算遗憾
-                regret = action_values[action_id] - ev
+            for action_type in legal_action_types:
+                # 计算遗憾 (instantaneous regret)
+                regret = action_values[action_type] - ev
 
-                # 归一化并裁剪遗憾值到[-1, 1]范围
-                normalized_regret = regret / max_abs_val
-                clipped_regret = np.clip(normalized_regret, -1.0, 1.0)
+                # 按筹码量级归一化（保持相对大小，但避免数值过大）
+                normalized_regret = regret / stake_normalizer
 
-                # Linear CFR: 使用迭代次数作为采样优先级权重，而不是放大遗憾值
-                iteration_weight = np.sqrt(iteration) if iteration > 1 else 1.0
-                priority = (abs(clipped_regret) + 0.01) * iteration_weight
+                # Linear CFR: 使用迭代次数 t 作为权重（论文推荐）
+                priority = float(iteration)
 
                 # 添加到优势网络内存 (匹配原始cfr_traverse格式: 5个值)
-                self.advantage_memory.add(
-                    (
-                        encode_state(state, self.player_id),
-                        np.zeros(20),  # 对手特征占位符
-                        action_id,
-                        0.0,  # 下注大小占位符
-                        clipped_regret,
-                    ),
-                    priority,
-                )
+                if action_type == 2:  # 加注动作
+                    self.advantage_memory.add(
+                        (
+                            encode_state(state, self.player_id),
+                            np.zeros(20),  # 对手特征占位符
+                            action_type,
+                            bet_size_multiplier,
+                            normalized_regret,
+                        ),
+                        priority,
+                    )
+                else:
+                    self.advantage_memory.add(
+                        (
+                            encode_state(state, self.player_id),
+                            np.zeros(20),  # 对手特征占位符
+                            action_type,
+                            0.0,  # 下注大小占位符
+                            normalized_regret,
+                        ),
+                        priority,
+                    )
 
             # 添加到策略内存
             strategy_full = np.zeros(self.num_actions)
-            for a in legal_action_ids:
+            for a in legal_action_types:
                 strategy_full[a] = strategy[a]
 
             self.strategy_memory.append(
@@ -1131,7 +1152,7 @@ def train_with_mixed_checkpoints(
                     encode_state(state, self.player_id),
                     np.zeros(20),  # 对手特征占位符
                     strategy_full,
-                    0.0,  # 下注大小占位符
+                    bet_size_multiplier if 2 in legal_action_types else 0.0,
                     iteration,
                 )
             )
@@ -1470,6 +1491,17 @@ if __name__ == "__main__":
         action="store_true",
         help="启用严格的错误检查，对无效游戏状态抛出异常",
     )
+    parser.add_argument(
+        "--network-size",
+        type=str,
+        default="medium",
+        choices=["small", "medium", "large", "xlarge"],
+        help="网络大小预设:\n"
+        "- small: 256隐藏层, 3层 (~1.7MB, 快速训练)\n"
+        "- medium: 512隐藏层, 4层 (~8MB, 推荐)\n"
+        "- large: 768隐藏层, 5层 (~20MB, 更强)\n"
+        "- xlarge: 1024隐藏层, 6层 (~50MB, 最强但慢)",
+    )
     args = parser.parse_args()
 
     # 用于调试的严格训练
@@ -1495,6 +1527,7 @@ if __name__ == "__main__":
             refresh_interval=args.refresh_interval,
             num_opponents=args.num_opponents,
             memory_size=args.memory_size,
+            network_size=args.network_size,
             verbose=args.verbose,
         )
     elif args.checkpoint and args.self_play:
@@ -1535,6 +1568,7 @@ if __name__ == "__main__":
             save_dir=args.save_dir,
             log_dir=args.log_dir,
             memory_size=args.memory_size,
+            network_size=args.network_size,
             verbose=args.verbose,
         )
 

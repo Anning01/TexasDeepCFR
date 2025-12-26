@@ -10,27 +10,61 @@ def set_verbose(verbose_mode):
     VERBOSE = verbose_mode
 
 
+class ResidualBlock(nn.Module):
+    """带有 Layer Normalization 的残差块。"""
+
+    def __init__(self, hidden_size, dropout=0.1):
+        super().__init__()
+        self.fc1 = nn.Linear(hidden_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.ln = nn.LayerNorm(hidden_size)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        residual = x
+        out = nn.functional.relu(self.fc1(x))
+        out = self.dropout(out)
+        out = self.fc2(out)
+        out = self.ln(out + residual)  # 残差连接 + Layer Norm
+        return nn.functional.relu(out)
+
+
 class PokerNetwork(nn.Module):
     """具有连续下注大小功能的扑克网络。"""
 
-    def __init__(self, input_size=500, hidden_size=256, num_actions=3):
+    def __init__(self, input_size=500, hidden_size=256, num_actions=3, num_layers=3, dropout=0.1):
         super().__init__()
-        # 共享特征提取层
-        self.base = nn.Sequential(
+        self.hidden_size = hidden_size
+
+        # 输入投影层
+        self.input_proj = nn.Sequential(
             nn.Linear(input_size, hidden_size),
+            nn.LayerNorm(hidden_size),
             nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),
+            nn.Dropout(dropout),
         )
-        # 动作类型预测（弃牌、过牌/跟注、加注）
-        self.action_head = nn.Linear(hidden_size, num_actions)
-        # 连续下注大小预测
+
+        # 残差块堆叠（可配置层数）
+        self.residual_blocks = nn.ModuleList([
+            ResidualBlock(hidden_size, dropout) for _ in range(num_layers)
+        ])
+
+        # 动作类型预测头（弃牌、过牌/跟注、加注）
+        self.action_head = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size // 2, num_actions),
+        )
+
+        # 连续下注大小预测头
         self.sizing_head = nn.Sequential(
             nn.Linear(hidden_size, hidden_size // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size // 2, hidden_size // 4),
             nn.Tanh(),
-            nn.Linear(hidden_size // 2, 1),
+            nn.Linear(hidden_size // 4, 1),
             nn.Sigmoid(),  # Output between 0-1
         )
 
@@ -46,8 +80,12 @@ class PokerNetwork(nn.Module):
         返回:
             (动作logits, 下注大小预测)的元组
         """
-        # 处理基础特征
-        features = self.base(x)
+        # 输入投影
+        features = self.input_proj(x)
+
+        # 通过残差块
+        for block in self.residual_blocks:
+            features = block(features)
 
         # 输出动作logits和下注大小
         action_logits = self.action_head(features)
