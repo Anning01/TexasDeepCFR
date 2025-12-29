@@ -1,5 +1,4 @@
 import random
-import time
 from collections import deque
 
 import numpy as np
@@ -133,31 +132,10 @@ class PrioritizedMemory:
 
 
 class DeepCFRAgent:
-    # 网络大小预设
-    SIZE_PRESETS = {
-        "small": {"hidden_size": 256, "num_layers": 3, "dropout": 0.1},    # ~1.7MB
-        "medium": {"hidden_size": 512, "num_layers": 4, "dropout": 0.1},   # ~8MB
-        "large": {"hidden_size": 768, "num_layers": 5, "dropout": 0.15},   # ~20MB
-        "xlarge": {"hidden_size": 1024, "num_layers": 6, "dropout": 0.2},  # ~50MB
-    }
-
-    def __init__(self, player_id=0, num_players=6, memory_size=300000, device="cpu",
-                 network_size="medium"):
+    def __init__(self, player_id=0, num_players=6, memory_size=300000, device="cpu"):
         self.player_id = player_id
         self.num_players = num_players
         self.device = device
-        self.network_size = network_size
-
-        # 获取网络配置
-        if network_size in self.SIZE_PRESETS:
-            config = self.SIZE_PRESETS[network_size]
-        else:
-            print(f"警告: 未知的网络大小 '{network_size}'，使用 'medium'")
-            config = self.SIZE_PRESETS["medium"]
-
-        hidden_size = config["hidden_size"]
-        num_layers = config["num_layers"]
-        dropout = config["dropout"]
 
         # 定义动作类型 (弃牌, 跟注, 加注)
         self.num_actions = 3
@@ -169,18 +147,12 @@ class DeepCFRAgent:
 
         # 创建带有下注大小的优势网络
         self.advantage_net = PokerNetwork(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_actions=self.num_actions,
-            num_layers=num_layers,
-            dropout=dropout
+            input_size=input_size, hidden_size=256, num_actions=self.num_actions
         ).to(device)
 
-        # 优势网络学习率 - 根据网络大小调整
-        # 更大的网络需要更小的学习率
-        lr_scale = 256 / hidden_size  # 大网络用更小的学习率
+        # 优势网络学习率 - 1e-4 是 Deep CFR 论文的推荐值
         self.optimizer = optim.Adam(
-            self.advantage_net.parameters(), lr=1e-4 * lr_scale, weight_decay=1e-5
+            self.advantage_net.parameters(), lr=1e-4, weight_decay=1e-5
         )
 
         # 创建优先记忆缓冲器
@@ -188,22 +160,13 @@ class DeepCFRAgent:
 
         # 策略网络
         self.strategy_net = PokerNetwork(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_actions=self.num_actions,
-            num_layers=num_layers,
-            dropout=dropout
+            input_size=input_size, hidden_size=256, num_actions=self.num_actions
         ).to(device)
         # 策略网络学习率略低于优势网络，因为它需要更稳定
         self.strategy_optimizer = optim.Adam(
-            self.strategy_net.parameters(), lr=5e-5 * lr_scale, weight_decay=1e-5
+            self.strategy_net.parameters(), lr=5e-5, weight_decay=1e-5
         )
         self.strategy_memory = deque(maxlen=memory_size)
-
-        # 打印网络信息
-        total_params = sum(p.numel() for p in self.advantage_net.parameters())
-        print(f"网络大小: {network_size} (hidden={hidden_size}, layers={num_layers})")
-        print(f"每个网络参数量: {total_params:,} ({total_params * 4 / 1024 / 1024:.1f}MB)")
 
         # 用于保存统计信息
         self.iteration_count = 0
@@ -1006,9 +969,12 @@ class DeepCFRAgent:
         """
         使用收集的样本训练策略网络。
 
-        根据 Deep CFR 论文:
-        - 使用 MSE 损失
-        - 使用 Linear CFR 权重 (iteration t)
+        参数:
+            batch_size: 训练批次大小
+            epochs: 每次调用的训练轮数
+
+        返回:
+            平均训练损失
         """
         if len(self.strategy_memory) < batch_size:
             return 0
@@ -1023,6 +989,9 @@ class DeepCFRAgent:
 
             # 转换为张量
             state_tensors = torch.FloatTensor(np.array(states)).to(self.device)
+            opponent_feature_tensors = torch.FloatTensor(
+                np.array(opponent_features)
+            ).to(self.device)
             strategy_tensors = torch.FloatTensor(np.array(strategies)).to(self.device)
             bet_size_tensors = (
                 torch.FloatTensor(np.array(bet_sizes)).unsqueeze(1).to(self.device)
@@ -1031,20 +1000,21 @@ class DeepCFRAgent:
                 torch.FloatTensor(iterations).to(self.device).unsqueeze(1)
             )
 
-            # Linear CFR 权重: 按迭代次数 t 加权，归一化
+            # 按迭代对样本加权（线性CFR）
             weights = iteration_tensors / torch.sum(iteration_tensors)
 
             # 前向传播
             action_logits, bet_size_preds = self.strategy_net(state_tensors)
             predicted_strategies = F.softmax(action_logits, dim=1)
 
-            # 使用 MSE 损失（论文推荐）
-            # L = sum_a (t * (σ_t(a) - Π(I,a))^2)
-            per_sample_loss = torch.sum(
-                (strategy_tensors - predicted_strategies) ** 2, dim=1
+            # 动作类型损失（加权交叉熵）
+            # 添加小的epsilon以防止log(0)
+            action_loss = -torch.sum(
+                weights
+                * torch.sum(
+                    strategy_tensors * torch.log(predicted_strategies + 1e-8), dim=1
+                )
             )
-            # 加权平均
-            action_loss = torch.sum(weights.squeeze() * per_sample_loss)
 
             # 下注大小损失（仅适用于有加注动作的状态）
             raise_mask = strategy_tensors[:, 2] > 0
@@ -1053,15 +1023,16 @@ class DeepCFRAgent:
                 raise_bet_preds = bet_size_preds[raise_indices]
                 raise_bet_targets = bet_size_tensors[raise_indices]
                 raise_weights = weights[raise_indices]
-                raise_weights = raise_weights / raise_weights.sum()  # 重新归一化
 
-                bet_size_loss = F.mse_loss(
+                # 对下注大小使用huber损失以增强对异常值的鲁棒性
+                bet_size_loss = F.smooth_l1_loss(
                     raise_bet_preds, raise_bet_targets, reduction="none"
                 )
                 weighted_bet_size_loss = torch.sum(
-                    raise_weights.squeeze() * bet_size_loss.squeeze()
+                    raise_weights * bet_size_loss.squeeze()
                 )
 
+                # 以适当的权重组合损失
                 combined_loss = action_loss + 0.5 * weighted_bet_size_loss
             else:
                 combined_loss = action_loss
@@ -1070,8 +1041,8 @@ class DeepCFRAgent:
             self.strategy_optimizer.zero_grad()
             combined_loss.backward()
 
-            # 梯度裁剪 (论文使用 max_norm=1.0)
-            torch.nn.utils.clip_grad_norm_(self.strategy_net.parameters(), max_norm=1.0)
+            # 应用梯度裁剪
+            torch.nn.utils.clip_grad_norm_(self.strategy_net.parameters(), max_norm=0.5)
 
             self.strategy_optimizer.step()
 
