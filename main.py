@@ -2,6 +2,7 @@ import argparse
 import glob
 import os
 import random
+from itertools import combinations
 
 import pokerkit_adapter as pokers
 import torch
@@ -10,6 +11,143 @@ from core.deepcfr import DeepCFRAgent
 from core.model import set_verbose
 from game_logger import log_game_error
 from settings import STRICT_CHECKING, set_strict_checking
+
+
+# ============== 手牌评估器 ==============
+
+def get_card_value(card):
+    """获取牌的点数值 (2=0, 3=1, ..., A=12)"""
+    return int(card.rank)
+
+def get_card_suit(card):
+    """获取牌的花色 (0=梅花, 1=方块, 2=红桃, 3=黑桃)"""
+    return int(card.suit)
+
+def evaluate_hand(hole_cards, community_cards):
+    """
+    评估最佳5张牌组合。
+
+    返回: (牌力等级, 牌力值列表, 牌型名称)
+    牌力等级: 0=高牌, 1=一对, 2=两对, 3=三条, 4=顺子, 5=同花, 6=葫芦, 7=四条, 8=同花顺
+    """
+    all_cards = list(hole_cards) + list(community_cards)
+
+    if len(all_cards) < 5:
+        return (0, [0], "牌不足")
+
+    best_hand = None
+    best_rank = (-1, [])
+
+    # 尝试所有5张牌的组合
+    for combo in combinations(all_cards, 5):
+        rank = evaluate_five_cards(combo)
+        if rank > best_rank:
+            best_rank = rank
+            best_hand = combo
+
+    hand_names = ["高牌", "一对", "两对", "三条", "顺子", "同花", "葫芦", "四条", "同花顺", "皇家同花顺"]
+    rank_level = best_rank[0]
+
+    # 检查是否是皇家同花顺
+    if rank_level == 8:
+        values = sorted([get_card_value(c) for c in best_hand], reverse=True)
+        if values == [12, 11, 10, 9, 8]:  # A K Q J 10
+            rank_level = 9
+
+    return (rank_level, best_rank[1], hand_names[rank_level], best_hand)
+
+def evaluate_five_cards(cards):
+    """
+    评估5张牌的牌力。
+
+    返回: (牌力等级, 用于比较的值列表)
+    """
+    values = sorted([get_card_value(c) for c in cards], reverse=True)
+    suits = [get_card_suit(c) for c in cards]
+    value_counts = {}
+    for v in values:
+        value_counts[v] = value_counts.get(v, 0) + 1
+
+    # 检查同花
+    is_flush = len(set(suits)) == 1
+
+    # 检查顺子
+    is_straight = False
+    straight_high = 0
+    sorted_unique = sorted(set(values), reverse=True)
+
+    if len(sorted_unique) == 5:
+        if sorted_unique[0] - sorted_unique[4] == 4:
+            is_straight = True
+            straight_high = sorted_unique[0]
+        # 特殊情况: A-2-3-4-5 (轮子)
+        elif sorted_unique == [12, 3, 2, 1, 0]:
+            is_straight = True
+            straight_high = 3  # 5高的顺子
+
+    # 按出现次数和点数排序
+    counts = sorted(value_counts.items(), key=lambda x: (x[1], x[0]), reverse=True)
+
+    # 同花顺
+    if is_flush and is_straight:
+        return (8, [straight_high])
+
+    # 四条
+    if counts[0][1] == 4:
+        quad_val = counts[0][0]
+        kicker = counts[1][0]
+        return (7, [quad_val, kicker])
+
+    # 葫芦
+    if counts[0][1] == 3 and counts[1][1] == 2:
+        trips_val = counts[0][0]
+        pair_val = counts[1][0]
+        return (6, [trips_val, pair_val])
+
+    # 同花
+    if is_flush:
+        return (5, values)
+
+    # 顺子
+    if is_straight:
+        return (4, [straight_high])
+
+    # 三条
+    if counts[0][1] == 3:
+        trips_val = counts[0][0]
+        kickers = sorted([c[0] for c in counts[1:]], reverse=True)
+        return (3, [trips_val] + kickers)
+
+    # 两对
+    if counts[0][1] == 2 and counts[1][1] == 2:
+        high_pair = max(counts[0][0], counts[1][0])
+        low_pair = min(counts[0][0], counts[1][0])
+        kicker = counts[2][0]
+        return (2, [high_pair, low_pair, kicker])
+
+    # 一对
+    if counts[0][1] == 2:
+        pair_val = counts[0][0]
+        kickers = sorted([c[0] for c in counts[1:]], reverse=True)
+        return (1, [pair_val] + kickers)
+
+    # 高牌
+    return (0, values)
+
+def format_best_hand(best_hand):
+    """格式化显示最佳5张牌"""
+    if best_hand is None:
+        return "无"
+    return " ".join([card_to_string(c) for c in best_hand])
+
+def rank_value_to_string(value):
+    """将点数值转换为字符串"""
+    ranks = {0: "2", 1: "3", 2: "4", 3: "5", 4: "6", 5: "7", 6: "8",
+             7: "9", 8: "10", 9: "J", 10: "Q", 11: "K", 12: "A"}
+    return ranks.get(value, str(value))
+
+
+# ============== 原有功能 ==============
 
 
 def get_action_description(action):
@@ -377,22 +515,55 @@ def play_against_models(
             print("由于技术限制，未完成剩余公共牌的发放和最终结算")
             print("显示的结果基于当前筹码状态\n")
 
-        # 显示所有玩家的手牌
-        print("最终手牌:")
+        # 显示公共牌
+        community_cards_list = list(state.public_cards)
+        community_cards_str = " ".join(
+            [card_to_string(card) for card in community_cards_list]
+        )
+        print(f"公共牌: {community_cards_str if community_cards_str else '无'}")
+
+        # 显示所有玩家的手牌和牌力评估
+        print("\n最终手牌:")
+        player_hands = []  # 存储 (玩家ID, 牌力等级, 牌力值, 牌型名称, 最佳手牌)
         for i, p in enumerate(state.players_state):
             if p.active:
                 # 检查hand属性是否存在且有牌
                 if hasattr(p, "hand") and p.hand:
-                    hand = " ".join([card_to_string(card) for card in p.hand])
-                    print(f"玩家 {i}: {hand}")
+                    hole_cards = list(p.hand)
+                    hand_str = " ".join([card_to_string(card) for card in hole_cards])
+
+                    # 评估手牌（如果有足够的公共牌）
+                    if len(community_cards_list) >= 3:
+                        rank_level, rank_values, hand_name, best_hand = evaluate_hand(
+                            hole_cards, community_cards_list
+                        )
+                        best_hand_str = format_best_hand(best_hand)
+                        player_hands.append((i, rank_level, rank_values, hand_name, best_hand))
+                        print(f"玩家 {i}: {hand_str} → {hand_name} ({best_hand_str})")
+                    else:
+                        print(f"玩家 {i}: {hand_str}")
+                        player_hands.append((i, -1, [], "未评估", None))
                 else:
                     print(f"玩家 {i}: 手牌数据不可用")
+            else:
+                print(f"玩家 {i}: 已弃牌")
 
-        # 显示公共牌
-        community_cards = " ".join(
-            [card_to_string(card) for card in state.public_cards]
-        )
-        print(f"公共牌: {community_cards}")
+        # 如果有多个活跃玩家且有评估结果，显示获胜者
+        active_evaluated = [(pid, rl, rv, hn, bh) for pid, rl, rv, hn, bh in player_hands if rl >= 0]
+        if len(active_evaluated) > 1:
+            # 按牌力排序（先比较等级，再比较具体牌值）
+            active_evaluated.sort(key=lambda x: (x[1], x[2]), reverse=True)
+            winner = active_evaluated[0]
+            winner_id, winner_rank, _, winner_hand_name, winner_best = winner
+
+            # 检查是否有平局
+            ties = [p for p in active_evaluated if p[1] == winner_rank and p[2] == winner[2]]
+            if len(ties) > 1:
+                tie_players = ", ".join([f"玩家 {p[0]}" for p in ties])
+                print(f"\n🤝 平局: {tie_players} - {winner_hand_name}")
+            else:
+                player_label = "你" if winner_id == player_position else f"玩家 {winner_id}"
+                print(f"\n🏆 最强手牌: {player_label} - {winner_hand_name}")
 
         # 显示结果
         print("\n结果:")
