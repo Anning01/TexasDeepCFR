@@ -362,7 +362,7 @@ def continue_training(
     """
     # 导入TensorBoard
     from torch.utils.tensorboard import SummaryWriter
-
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     # 设置详细输出模式
     set_verbose(verbose)
 
@@ -384,7 +384,7 @@ def continue_training(
         player_id=player_id,
         num_players=num_players,
         memory_size=memory_size,
-        device="cuda" if torch.cuda.is_available() else "cpu",
+        device=device,
     )
 
     # 加载模型权重
@@ -568,8 +568,8 @@ def train_against_checkpoint(
 
     # 可选：从模型权重初始化学习智能体
     # 这将为它提供更好的起点
-    # learning_agent.advantage_net.load_state_dict(opponent_agents[0].advantage_net.state_dict())
-    # learning_agent.strategy_net.load_state_dict(opponent_agents[0].strategy_net.state_dict())
+    learning_agent.advantage_net.load_state_dict(opponent_agents[0].advantage_net.state_dict())
+    learning_agent.strategy_net.load_state_dict(opponent_agents[0].strategy_net.state_dict())
 
     # 用于跟踪学习进度
     losses = []  # 损失记录
@@ -852,30 +852,30 @@ def train_against_checkpoint(
 
             # 每隔几次迭代，训练策略网络并评估
             if iteration % 10 == 0 or iteration == additional_iterations:
-                print("  Training strategy network...")
+                print("  正在训练策略网络...")
                 strat_loss = learning_agent.train_strategy_network()
-                print(f"  Strategy network loss: {strat_loss:.6f}")
+                print(f"  策略网络损失: {strat_loss:.6f}")
                 writer.add_scalar("Loss/Strategy", strat_loss, iteration)
 
-                # Evaluate against checkpoint agents
-                print("  Evaluating against checkpoint agent...")
+                # 评估对手检查点代理
+                print("  正在评估对手检查点代理...")
                 avg_profit_vs_checkpoint = evaluate_against_checkpoint_agents(
                     learning_agent, opponent_agents, num_games=100
                 )
-                print(f"  Average profit vs checkpoint: {avg_profit_vs_checkpoint:.2f}")
+                print(f"  对手检查点代理的平均利润: {avg_profit_vs_checkpoint:.2f}")
                 writer.add_scalar(
                     "Performance/ProfitVsCheckpoint",
                     avg_profit_vs_checkpoint,
                     iteration,
                 )
 
-                # Also evaluate against random for comparison
-                print("  Evaluating against random agents...")
+                # 同时与随机代理进行比较评估
+                print("  正在评估对手随机代理...")
                 avg_profit_random = evaluate_against_random(
                     learning_agent, num_games=500, num_players=6
                 )
                 profits.append(avg_profit_random)
-                print(f"  Average profit vs random: {avg_profit_random:.2f}")
+                print(f"  对手随机代理的平均利润: {avg_profit_random:.2f}")
                 writer.add_scalar(
                     "Performance/ProfitVsRandom", avg_profit_random, iteration
                 )
@@ -1036,9 +1036,9 @@ def train_with_mixed_checkpoints(
 
         # 如果轮到训练智能体行动
         if current_player == self.player_id:
-            legal_action_ids = self.get_legal_action_ids(state)
+            legal_action_types = self.get_legal_action_types(state)
 
-            if not legal_action_ids:
+            if not legal_action_types:
                 if verbose:
                     print(
                         f"警告: 在深度 {depth} 为玩家 {current_player} 找不到合法行动"
@@ -1050,14 +1050,15 @@ def train_with_mixed_checkpoints(
                 self.device
             )
 
-            # 从网络获取优势值
+            # 从网络获取优势值和下注大小
             with torch.no_grad():
-                advantages = self.advantage_net(state_tensor.unsqueeze(0))[0]
+                advantages, bet_size_pred = self.advantage_net(state_tensor.unsqueeze(0))
+                advantages_np = advantages[0].cpu().numpy()
+                bet_size_multiplier = bet_size_pred[0][0].item()
 
             # 使用遗憾匹配来计算策略
-            advantages_np = advantages.cpu().numpy()
             advantages_masked = np.zeros(self.num_actions)
-            for a in legal_action_ids:
+            for a in legal_action_types:
                 advantages_masked[a] = max(advantages_np[a], 0)
 
             # 根据策略选择动作
@@ -1065,65 +1066,84 @@ def train_with_mixed_checkpoints(
                 strategy = advantages_masked / sum(advantages_masked)
             else:
                 strategy = np.zeros(self.num_actions)
-                for a in legal_action_ids:
-                    strategy[a] = 1.0 / len(legal_action_ids)
+                for a in legal_action_types:
+                    strategy[a] = 1.0 / len(legal_action_types)
 
-            # Choose actions and traverse
+            # 选择动作并遍历
             action_values = np.zeros(self.num_actions)
-            for action_id in legal_action_ids:
+            for action_type in legal_action_types:
                 try:
-                    pokers_action = self.action_id_to_pokers_action(action_id, state)
+                    # 对加注动作使用预测的下注大小
+                    if action_type == 2:  # 加注
+                        pokers_action = self.action_type_to_pokers_action(
+                            action_type, state, bet_size_multiplier
+                        )
+                    else:
+                        pokers_action = self.action_type_to_pokers_action(action_type, state)
+
                     new_state = state.apply_action(pokers_action)
 
-                    # Check if the action was valid (only Invalid is an error)
+                    # 检查动作是否有效（只有 Invalid 才是错误）
                     if new_state.status == pokers.StateStatus.Invalid:
                         if verbose:
                             print(
-                                f"WARNING: Invalid action {action_id} at depth {depth}. Status: {new_state.status}"
+                                f"WARNING: Invalid action {action_type} at depth {depth}. Status: {new_state.status}"
                             )
                         continue
 
-                    action_values[action_id] = self.cfr_traverse(
+                    action_values[action_type] = self.cfr_traverse(
                         new_state, iteration, opponent_agents, depth + 1
                     )
                 except Exception as e:
                     if verbose:
-                        print(f"ERROR in traversal for action {action_id}: {e}")
-                    action_values[action_id] = 0
+                        print(f"ERROR in traversal for action {action_type}: {e}")
+                    action_values[action_type] = 0
 
             # 计算反事实遗憾并添加到内存
-            ev = sum(strategy[a] * action_values[a] for a in legal_action_ids)
+            ev = sum(strategy[a] * action_values[a] for a in legal_action_types)
 
             # 计算归一化因子
             max_abs_val = max(abs(max(action_values)), abs(min(action_values)), 1.0)
 
-            for action_id in legal_action_ids:
+            for action_type in legal_action_types:
                 # 计算遗憾
-                regret = action_values[action_id] - ev
+                regret = action_values[action_type] - ev
 
                 # 归一化并裁剪遗憾值到[-1, 1]范围
                 normalized_regret = regret / max_abs_val
                 clipped_regret = np.clip(normalized_regret, -1.0, 1.0)
 
-                # Linear CFR: 使用迭代次数作为采样优先级权重，而不是放大遗憾值
+                # Linear CFR: 使用迭代次数作为采样优先级权重
                 iteration_weight = np.sqrt(iteration) if iteration > 1 else 1.0
                 priority = (abs(clipped_regret) + 0.01) * iteration_weight
 
                 # 添加到优势网络内存 (匹配原始cfr_traverse格式: 5个值)
-                self.advantage_memory.add(
-                    (
-                        encode_state(state, self.player_id),
-                        np.zeros(20),  # 对手特征占位符
-                        action_id,
-                        0.0,  # 下注大小占位符
-                        clipped_regret,
-                    ),
-                    priority,
-                )
+                if action_type == 2:  # 加注动作存储下注大小
+                    self.advantage_memory.add(
+                        (
+                            encode_state(state, self.player_id),
+                            np.zeros(20),  # 对手特征占位符
+                            action_type,
+                            bet_size_multiplier,
+                            clipped_regret,
+                        ),
+                        priority,
+                    )
+                else:
+                    self.advantage_memory.add(
+                        (
+                            encode_state(state, self.player_id),
+                            np.zeros(20),  # 对手特征占位符
+                            action_type,
+                            0.0,  # 非加注动作的默认下注大小
+                            clipped_regret,
+                        ),
+                        priority,
+                    )
 
             # 添加到策略内存
             strategy_full = np.zeros(self.num_actions)
-            for a in legal_action_ids:
+            for a in legal_action_types:
                 strategy_full[a] = strategy[a]
 
             self.strategy_memory.append(
@@ -1131,7 +1151,7 @@ def train_with_mixed_checkpoints(
                     encode_state(state, self.player_id),
                     np.zeros(20),  # 对手特征占位符
                     strategy_full,
-                    0.0,  # 下注大小占位符
+                    bet_size_multiplier if 2 in legal_action_types else 0.0,
                     iteration,
                 )
             )

@@ -969,6 +969,8 @@ class DeepCFRAgent:
         """
         使用收集的样本训练策略网络。
 
+        根据 Deep CFR 论文使用 MSE 损失和 Linear CFR 权重。
+
         参数:
             batch_size: 训练批次大小
             epochs: 每次调用的训练轮数
@@ -985,13 +987,10 @@ class DeepCFRAgent:
         for _ in range(epochs):
             # 从记忆中采样批次
             batch = random.sample(self.strategy_memory, batch_size)
-            states, opponent_features, strategies, bet_sizes, iterations = zip(*batch)
+            states, _, strategies, bet_sizes, iterations = zip(*batch)
 
             # 转换为张量
             state_tensors = torch.FloatTensor(np.array(states)).to(self.device)
-            opponent_feature_tensors = torch.FloatTensor(
-                np.array(opponent_features)
-            ).to(self.device)
             strategy_tensors = torch.FloatTensor(np.array(strategies)).to(self.device)
             bet_size_tensors = (
                 torch.FloatTensor(np.array(bet_sizes)).unsqueeze(1).to(self.device)
@@ -1000,21 +999,18 @@ class DeepCFRAgent:
                 torch.FloatTensor(iterations).to(self.device).unsqueeze(1)
             )
 
-            # 按迭代对样本加权（线性CFR）
+            # Linear CFR 权重: 按迭代次数加权，归一化
             weights = iteration_tensors / torch.sum(iteration_tensors)
 
             # 前向传播
             action_logits, bet_size_preds = self.strategy_net(state_tensors)
             predicted_strategies = F.softmax(action_logits, dim=1)
 
-            # 动作类型损失（加权交叉熵）
-            # 添加小的epsilon以防止log(0)
-            action_loss = -torch.sum(
-                weights
-                * torch.sum(
-                    strategy_tensors * torch.log(predicted_strategies + 1e-8), dim=1
-                )
-            )
+            # 使用 MSE 损失（Deep CFR 论文推荐）
+            # 计算每个样本的 MSE
+            per_sample_mse = torch.sum((strategy_tensors - predicted_strategies) ** 2, dim=1)
+            # 加权平均
+            action_loss = torch.sum(weights.squeeze() * per_sample_mse)
 
             # 下注大小损失（仅适用于有加注动作的状态）
             raise_mask = strategy_tensors[:, 2] > 0
@@ -1024,16 +1020,14 @@ class DeepCFRAgent:
                 raise_bet_targets = bet_size_tensors[raise_indices]
                 raise_weights = weights[raise_indices]
 
-                # 对下注大小使用huber损失以增强对异常值的鲁棒性
-                bet_size_loss = F.smooth_l1_loss(
-                    raise_bet_preds, raise_bet_targets, reduction="none"
-                )
+                # 对下注大小使用MSE损失
+                bet_size_loss = (raise_bet_preds - raise_bet_targets) ** 2
                 weighted_bet_size_loss = torch.sum(
                     raise_weights * bet_size_loss.squeeze()
                 )
 
-                # 以适当的权重组合损失
-                combined_loss = action_loss + 0.5 * weighted_bet_size_loss
+                # 组合损失
+                combined_loss = action_loss + 0.1 * weighted_bet_size_loss
             else:
                 combined_loss = action_loss
 
@@ -1041,8 +1035,8 @@ class DeepCFRAgent:
             self.strategy_optimizer.zero_grad()
             combined_loss.backward()
 
-            # 应用梯度裁剪
-            torch.nn.utils.clip_grad_norm_(self.strategy_net.parameters(), max_norm=0.5)
+            # 应用梯度裁剪（论文推荐 max_norm=1.0）
+            torch.nn.utils.clip_grad_norm_(self.strategy_net.parameters(), max_norm=1.0)
 
             self.strategy_optimizer.step()
 
